@@ -14,8 +14,8 @@
 
 ## 📋 系统状态
 
-- ✅ `daily-learning`: **已修复** — 模型改 `minimax/MiniMax-M3` + `--best-effort-deliver`，08:00 定时实跑返回 `status: ok`
-- ✅ `daily-reflection`: **已修复** — 同上配置，04:27 实跑返回 `status: ok`（39 次失败后首次成功）
+- ✅ `daily-learning`: **已修复** — 模型改 `minimax/MiniMax-M3` + `--best-effort-deliver`，手动实跑 2 次均 `status: ok`；周频（周一 09:00），**首次自动调度验证待 10-26**
+- ✅ `daily-reflection`: **已修复** — 同上配置，手动实跑 `status: ok`（39 次失败后首次成功）；周频（周日 22:00），**首次自动调度验证待 10-25**
 - ✅ 频率周频：周一 09:00 学习 / 周日 22:00 反思
 - ❌ `teahouse-check` (2 份)、`dream-cycle-v3`: enabled=false（4 月起就被 LLM 1305 报错）
 - 🔴 `glmcode` provider API key 过期（全部模型 401）→ **需用户重新申请**
