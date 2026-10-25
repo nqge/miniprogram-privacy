@@ -83,3 +83,9 @@
 - `plugins.installs` 补全（source:'path'）+ gateway restart 生效 → **CLI 告警全清**
 - 5 插件全部 loaded；skillhub CLI 实测可搜索
 - `scripts/log_cleanup.sh` 日志轮转兜底已上线
+
+## ✅ 04:15 补充
+- 日志清理脚本从未被调度 → 已补 cron `log-cleanup`（每日 04:30）
+- log_cleanup.sh 的 mtime 判龄规则永不触发（轮转按大小不按天）→ 重写为槽位日期判龄
+- `/tmp/openclaw` 77M → 2.5M（删 4 个僵尸槽位 + 剥离 33911 行历史残留）
+- 提交推送 `90371ef`
