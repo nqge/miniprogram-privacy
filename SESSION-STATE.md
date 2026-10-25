@@ -182,3 +182,24 @@
 **结论**: 无紧急项，系统稳定；反思已写入 memory/2026-10-26.md
 **新发现**: 10-21 定的"沉默期保留内部学习"规则未被执行 → 规则需嵌入 cron 而非靠自觉
 **残留项**: 5 项待牛哥哥决策（已 6+ 周未决），下次整理成"待决策选项单"一次性交付
+
+### 2026-10-26 00:45 心跳（周一凌晨）— 修复了模型回退链 + 复活茶馆监控
+**背景**: 自 2026-10-23 04:03 后 ~3 天
+**当前时间**: 周一 00:45 AM（深夜，牛哥哥睡眠时段）
+**检查**:
+- 上下文 4% 健康 ✅
+- **cron 双任务此前全 error**（rate_limit + fallback 凭证失效），本轮已修复并实跑验证 ✅
+- **茶馆监控停更 ≈166 天**，本轮已复活并捞回 95 条历史讨论 ✅
+- 磁盘 75%，日志目录自愈 ✅
+- qqbot/ddingtalk stale config 仍刷屏（cosmetic）
+- 无 pending_notify 待发文件
+
+**本轮动作（均为内部分析+修复，未外发消息）**:
+1. 逐 provider 实测 4 个 provider 的真实可用性（minimax 3 模型 200 OK；kimicode 404+模型名错；glmcode 401 key 过期；arkcode 全部 UnsupportedModel）
+2. 改 `agents.defaults.model.fallbacks` → 同 provider 内互备 `[MiniMax-M2.7-highspeed, MiniMax-M2.7]`，备份 `openclaw.json.bak-20261026`
+3. 手动 `cron run` 两任务 → 均 `status: ok`
+4. 新写 `scripts/teahouse_monitor.py`（REST id 去重 + 重试），跑通，生成 `memory/teahouse_summary_2026-10-26_0040.md`
+5. 新增 cron `teahouse-monitor`（每 4h，isolated，no-deliver）
+
+**结论**: 无紧急项；两个"长期已知项"本轮被真正修复（不是再记一遍）
+**残留项**: 3 个 provider 凭证决策、qqbot/ddingtalk 清理、哈希基线、cron 频率是否改回每日
