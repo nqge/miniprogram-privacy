@@ -1,0 +1,4 @@
+# 本地凭证文件 — 绝不入库
+GIT_CREDENTIALS.md
+*.local.md
+.openclaw/openclaw.json
