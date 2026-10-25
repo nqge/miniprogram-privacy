@@ -259,3 +259,13 @@
 5. 配置哈希基线已更新（配置变更后必须重算）
 **教训**: 反复出现的警告要分清是噪音还是真问题。`plugins.allow is empty` 我归错类 6 周，还打算当"低优先级清理项"扔给你——它其实是"扩展目录里的代码自动获得执行权"。
 **残留项**: 4 项（见 `待决策选项单.md`），第 1 项吊销 PAT 建议尽快
+
+### 2026-10-26 03:45 心跳（周一凌晨第五轮）— 日志膨胀溯源 + CLI 零告警
+**动作**:
+1. 统计今日日志级别分布 → 发现 33910 条同一条 stale config 警告（= 10-23 那次 24M/天递归的**同一根因**，当时只降级未根除）
+2. 写 `scripts/log_cleanup.sh` 日志轮转兜底（本机无 logrotate）
+3. 补 `plugins.installs` 登记 skillhub / adp-openclaw（`source:"path"`，先踩了枚举值坑）
+4. `openclaw gateway restart` 使配置生效（pid 3998089 → 3967889）
+5. **openclaw CLI 告警全清**；5 插件全部 loaded；skillhub CLI 实测可搜索
+**关键**: 「warning 消失了」≠「warning 根因被消除」。必须按内容统计条数才能区分。
+**残留项**: 4 项（见 `待决策选项单.md`）
