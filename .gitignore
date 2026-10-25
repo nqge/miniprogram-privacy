@@ -2,3 +2,9 @@
 GIT_CREDENTIALS.md
 *.local.md
 .openclaw/openclaw.json
+
+# 本地 gitlink 检出目录（无 .gitmodules 配置，不入库）
+/nuclei/
+/openclaw-qa/
+/skills/ai-daily-newsletter/
+/skills/src-recon/
