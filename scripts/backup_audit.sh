@@ -92,7 +92,13 @@ for d in memory scripts skills; do
   if [ "$REMOTE_COUNT" -eq 0 ]; then
     bad "$d/ 未入库"
   elif [ "$REMOTE_COUNT" -lt "$LOCAL_COUNT" ]; then
-    warn "$d/ 远端 $REMOTE_COUNT 个 < 本地 $LOCAL_COUNT 个（可能漏文件）"
+    # 独立 git 仓库（自带 .git 与 remote）不计入本仓库覆盖统计
+    NESTED=$(find "$d" -mindepth 1 -maxdepth 2 -type d -name .git 2>/dev/null | wc -l)
+    if [ "$NESTED" -gt 0 ]; then
+      ok "$d/ 已备份 $REMOTE_COUNT 个文件（另有 $NESTED 个独立仓库，各自管理自己的 remote）"
+    else
+      warn "$d/ 远端 $REMOTE_COUNT 个 < 本地 $LOCAL_COUNT 个（可能漏文件）"
+    fi
   else
     ok "$d/ 已备份 $REMOTE_COUNT 个文件"
   fi
