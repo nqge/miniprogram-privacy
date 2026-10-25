@@ -8,3 +8,6 @@ GIT_CREDENTIALS.md
 /openclaw-qa/
 /skills/ai-daily-newsletter/
 /skills/src-recon/
+
+# 本地运行时状态目录（不入库）
+/.openclaw/
