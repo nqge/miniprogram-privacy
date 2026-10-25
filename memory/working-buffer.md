@@ -67,3 +67,8 @@
 - 从未推送（远端干净），但本地明文保存半年
 - secret scanning 已识别，格式为有效 PAT
 - 未擅自吊销（会破坏现有工作流）
+
+## ✅ 灾备完整性已补齐（2026-10-26 01:30）
+- 远端现已含：AGENTS / SOUL / USER / IDENTITY / MEMORY / TOOLS / HEARTBEAT / SESSION-STATE + memory/ + scripts/ + skills/
+- 配置哈希基线已落地（6+ 周待办之一完成）
+- 遗留：memory/2026-10-19.md、2026-10-20.md 本地也没有（当时只写进 SESSION-STATE）

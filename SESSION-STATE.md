@@ -216,3 +216,11 @@
 - `.gitignore` 排除凭证/openclaw.json/4 个 gitlink 目录；清理缺 `.gitmodules` 的 gitlink
 - 详细复盘写入 `memory/2026-10-26.md`
 **残留项**: 建议牛哥哥吊销重签 GIT_CREDENTIALS.md 中的 2 个 PAT（未擅自吊销）
+
+### 2026-10-26 01:30 补记 — 灾备完整性补齐
+**背景**: 推送恢复后回头检查"远端到底备份了什么"
+**发现**: SOUL.md / TOOLS.md / USER.md **全部未入库**（3 月曾入库，后被 git rm 掉，无记录）。若机器此刻损毁，身份与安全指南全部丢失。
+**已补**: 三个文件入库 + `.gitignore` 补 `/.openclaw/` + **配置哈希基线落地**（积压 6+ 周待办之一）
+**基线**: `4f020adbc90e492e63f232242225822736362ed51229ae20cdbdd77ff9e8423d  /root/.openclaw/openclaw.json`
+**凭证扫描**: 远端 + 工作区（除本地 GIT_CREDENTIALS.md 副本）均无 `ghp_`/`github_pat_`
+**教训**: 「push 成功」≠「备份完整」。验收标准应是"假设今天机器消失，我能否重建自己"。
