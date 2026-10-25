@@ -203,3 +203,16 @@
 
 **结论**: 无紧急项；两个"长期已知项"本轮被真正修复（不是再记一遍）
 **残留项**: 3 个 provider 凭证决策、qqbot/ddingtalk 清理、哈希基线、cron 频率是否改回每日
+
+### 2026-10-26 01:15 补记 — 灾备推送恢复 + 安全清理
+**背景**: 上一条心跳说"等网络恢复再推"，实际连续 5 次失败
+**根因（分层诊断，非网络抖动）**:
+- 分支名错：远端 `master`，我推 `main`
+- URL rewrite：`url.https://github.com/.insteadof` 把 SSH 静默改回 HTTPS（`--unset-all` 对含斜杠 section 名无效，须用完整 key）
+- GitHub secret scanning 真实拦截：`GIT_CREDENTIALS.md` 含真实 `ghp_`/`github_pat_` PAT（commit aad5ffd 引入）
+**动作**:
+- rebase 重写历史清除密钥，遍历 9 个 commit 验证无凭证文件
+- 清除 URL rewrite，remote 改回 SSH，push 成功（`e6dad21..b1fd95c`，再 `f9437d9`）
+- `.gitignore` 排除凭证/openclaw.json/4 个 gitlink 目录；清理缺 `.gitmodules` 的 gitlink
+- 详细复盘写入 `memory/2026-10-26.md`
+**残留项**: 建议牛哥哥吊销重签 GIT_CREDENTIALS.md 中的 2 个 PAT（未擅自吊销）

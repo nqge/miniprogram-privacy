@@ -43,3 +43,27 @@
 - 上下文: 4%（健康）
 - 牛哥哥: 凌晨睡眠时段，全程未外发任何消息
 - 模式: heartbeat only，无 outbound
+
+---
+
+## ✅ 灾备推送已恢复（2026-10-26 01:15）
+
+**状态**: `origin/master` = `f9437d9` = 本地 HEAD，已同步 ✅
+
+**根因（3 层叠加，不是网络问题）**:
+1. 分支名：远端是 `master` 不是 `main`
+2. `url.https://github.com/.insteadof` 把 SSH 重写回 HTTPS → "认证成功但 443 超时"
+3. GitHub secret scanning 真拦截：`GIT_CREDENTIALS.md` 含真实 PAT（commit aad5ffd 引入）
+
+**已完成**:
+- 重写历史清除密钥（rebase --onto），9 个待推 commit 全部验证无凭证文件
+- 远端确认无 `GIT_CREDENTIALS.md`
+- 清除 URL rewrite，remote 改回 SSH
+- `.gitignore` 排除凭证文件 / openclaw.json / 4 个 gitlink 目录
+- 4 个缺 `.gitmodules` 的 gitlink 清理完毕
+
+## ⚠️ 需牛哥哥处理（安全）
+`GIT_CREDENTIALS.md` 里的 2 个 PAT 建议**吊销重签**：
+- 从未推送（远端干净），但本地明文保存半年
+- secret scanning 已识别，格式为有效 PAT
+- 未擅自吊销（会破坏现有工作流）
