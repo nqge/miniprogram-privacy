@@ -72,3 +72,8 @@
 - 远端现已含：AGENTS / SOUL / USER / IDENTITY / MEMORY / TOOLS / HEARTBEAT / SESSION-STATE + memory/ + scripts/ + skills/
 - 配置哈希基线已落地（6+ 周待办之一完成）
 - 遗留：memory/2026-10-19.md、2026-10-20.md 本地也没有（当时只写进 SESSION-STATE）
+
+## ✅ 02:25 补充
+- `proactive-tracker.md` 已重建并入库（HEARTBEAT 依赖项，此前丢失）
+- `scripts/backup_audit.sh` 已上线 + cron `backup-audit`（每日 03:00），当前 PASS=19 FAIL=0 WARN=0
+- 5 项待决策已整理为 `待决策选项单.md`，含我的建议与 A/B/C 选项
