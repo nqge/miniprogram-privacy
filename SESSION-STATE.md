@@ -249,3 +249,13 @@
 - ai-daily-newsletter：remote 改回 `git@github.com:nqge/...`；本地修复与远端 `5ad0c1f` 等价 → `reset --hard` 同步，不重复提交
 **教训**: 「未提交的改动」是最危险的状态——既不进版本库，也不算待办。发布出去的代码必须能被别人验证。
 **残留项**: 不变（见 `待决策选项单.md`）
+
+### 2026-10-26 03:20 心跳（周一凌晨第四轮）— 配置硬化 + 警告全清
+**动作**:
+1. 实跑验证两个新 cron：`backup-audit` ok (PASS=19) / `teahouse-monitor` ok (正确识别无新内容) ✅
+2. **修掉真安全隐患**：`plugins.allow` 从未设置 → 非捆绑插件可被自动加载执行。已固定为 `["skillhub","adp-openclaw","qwen-portal-auth","feishu"]`
+3. 删除 `qqbot` / `ddingtalk` 残留 entries（目录早不存在，每次刷 stale 警告）
+4. **openclaw CLI 全部 Config warnings 首次归零**
+5. 配置哈希基线已更新（配置变更后必须重算）
+**教训**: 反复出现的警告要分清是噪音还是真问题。`plugins.allow is empty` 我归错类 6 周，还打算当"低优先级清理项"扔给你——它其实是"扩展目录里的代码自动获得执行权"。
+**残留项**: 4 项（见 `待决策选项单.md`），第 1 项吊销 PAT 建议尽快
