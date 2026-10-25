@@ -77,3 +77,9 @@
 - `proactive-tracker.md` 已重建并入库（HEARTBEAT 依赖项，此前丢失）
 - `scripts/backup_audit.sh` 已上线 + cron `backup-audit`（每日 03:00），当前 PASS=19 FAIL=0 WARN=0
 - 5 项待决策已整理为 `待决策选项单.md`，含我的建议与 A/B/C 选项
+
+## ✅ 03:45 补充
+- 日志膨胀根因已除（33910 条同源警告 = 10-23 那次的同一根因，当时只降级未根除）
+- `plugins.installs` 补全（source:'path'）+ gateway restart 生效 → **CLI 告警全清**
+- 5 插件全部 loaded；skillhub CLI 实测可搜索
+- `scripts/log_cleanup.sh` 日志轮转兜底已上线
