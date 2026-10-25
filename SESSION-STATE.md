@@ -237,3 +237,15 @@
 4. **新建 `待决策选项单.md`** —— 取代散落 12 处的"残留项"，按 需你决策 / 我自己能定 分档，附我的建议
 **结论**: 无紧急项；下一动作点 03:00 审计首跑、04:15 茶馆首跑
 **残留项**: 全部收敛到 `待决策选项单.md`，共 5 项，仅第 1 项（吊销 PAT）建议尽快
+
+### 2026-10-26 03:10 心跳（周一凌晨第三轮）— 独立 skill 仓库体检
+**背景**: backup_audit 报出 skills/ 覆盖缺口，追查发现不是误报
+**发现**:
+- 🔴 **src-recon 已发布版本有致命语法错误**：`core/vulnerability_analyzer.py:326` f-string 括号不匹配 → 该模块无法 import，"智能漏洞分析"功能一直是死的。本地修好了但从未推送。
+- 🔴 **ai-daily-newsletter remote 指向已迁移仓库**（`adminlove520/...` → 404），实际在 `nqge/ai-daily-newsletter`
+- ⚠️ `src-recon` 的 `origin/master` 领先 main 25 个 commit，但内容是旧工作区文件，**不是 skill** —— skill 只在 main
+**已做**:
+- src-recon：修复语法错误 + 提交 39 个文件（文档重构 / 5 个新脚本 / waf_bypass_utils / CHANGELOG）→ 推送 `51a24e0..af0b05a`；远端全量 Python 语法校验通过
+- ai-daily-newsletter：remote 改回 `git@github.com:nqge/...`；本地修复与远端 `5ad0c1f` 等价 → `reset --hard` 同步，不重复提交
+**教训**: 「未提交的改动」是最危险的状态——既不进版本库，也不算待办。发布出去的代码必须能被别人验证。
+**残留项**: 不变（见 `待决策选项单.md`）
