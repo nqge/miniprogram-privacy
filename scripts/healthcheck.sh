@@ -88,6 +88,15 @@ qtmr=$(systemctl --user is-active openclaw-quick-health.timer 2>/dev/null)
 if [ "$qtmr" = "active" ]; then ok "openclaw-quick-health.timer = active（30 分钟巡检）"
 else bad "openclaw-quick-health.timer = ${qtmr:-missing} — 服务故障最长 4 小时才被发现"; fi
 
+# 告警链路的 OnFailure 指令是否**真正生效**（不 grep 文件 —— 注释里也可能有这行字）
+# 2026-10-26 教训：重写 .service 时把指令弄丢了，但注释里还留着 → grep 看着正常，实际静默失效
+qof=$(systemctl --user show openclaw-quick-health.service -p OnFailure --value 2>/dev/null | tr -d '\n')
+if echo "$qof" | grep -q "quick-health-alert"; then
+  ok "quick-health 的 OnFailure 告警链路已生效"
+else
+  bad "quick-health 的 OnFailure 指令丢失或指向异常 — 故障时不会告警（$qof）"
+fi
+
 # ── C. 记忆索引 ───────────────────────────────────
 echo ""
 echo "【C】记忆索引"
