@@ -29,6 +29,12 @@ WS = "/root/.openclaw/workspace"
 FAILED = []
 PASSED = 0
 
+# 本次运行的唯一标识 + 开始时刻（2026-10-26 加，理由见 _write_result_file 的注释）
+import datetime as _dt
+import uuid as _uuid
+_RUN_ID = _uuid.uuid4().hex[:12]
+_RUN_STARTED_AT = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 # systemd 的 PATH 不含 /root/.local/share/pnpm → openclaw 找不到
 # （2026-10-26 实测：同一脚本在交互 shell 正常，systemd 下报「无法读取 cron 状态」）
 OPENCLAW = "/root/.local/share/pnpm/openclaw"
@@ -260,14 +266,52 @@ def _check_unit_drift():
 
 
 RESULT_FILE = f"{WS}/logs/quick-health-result.json"
+RUNNING_FILE = f"{WS}/logs/quick-health-running.json"
 
 
-def _write_result_file():
+def _write_running_marker():
+    """开跑前先写一份「运行中」标记 —— E26 的另一半修复。
+
+    为什么：只用「文件新鲜度」判断陈旧是不够的 ——
+    崩溃发生在写文件「之前」时，文件里留的是上一次成功的结果，
+    而它可能只有 1 分钟前写的（看起来很新鲜）→ 告警仍会被吞掉。
+
+    有了这个标记：脚本崩在中间时，文件停在 status="running"，
+    读取方一看就知道「这次没跑完」→ 判定为失败并告警 ✅
+
+    只写一个极小的文件（不写 failures 列表），避免和正式结果混淆。
+    """
+    import datetime
+    try:
+        os.makedirs(f"{WS}/logs", exist_ok=True)
+        with open(RUNNING_FILE, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "startedAt": _RUN_STARTED_AT,
+                    "runId": _RUN_ID,
+                    "status": "running",
+                    "pid": os.getpid(),
+                },
+                f,
+                ensure_ascii=False,
+            )
+    except Exception:
+        pass
+
+
+def _write_result_file(run_id=None):
     """把本次结果写到文件 —— alert_dedup.py 读它，而不是重跑一遍巡检。
 
     为什么：原来 dedup 会自己再跑一次 quick_health.py，
     导致每次成功巡检实际跑两遍（8 秒 → 16 秒），而且两次结果可能不一致
     （第一次失败、第二次成功这种竞态会让状态错乱）。
+
+    ⚠️ run_id（2026-10-26 加）：每次运行的唯一标识 + 开始时刻。
+    为什么必须有 —— 见下方 E26：
+    脚本如果在写这个文件「之前」就崩了/被 kill/超时，
+    文件里留的还是上一次成功的结果，alert_dedup.py 读到它会说「无故障」，
+    **告警被静默吞掉 —— 恰恰发生在系统最坏的时候**。
+    有了 run_id，读取方能判断「这份结果是不是本次的」，陈旧就自己重跑。
     """
     import datetime
     try:
@@ -276,6 +320,9 @@ def _write_result_file():
             json.dump(
                 {
                     "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "startedAt": _RUN_STARTED_AT,
+                    "runId": run_id or _RUN_ID,
+                    "status": "done",
                     "passed": PASSED,
                     "failed": len(FAILED),
                     "failures": FAILED,
@@ -310,6 +357,8 @@ def _persist_log():
 
 
 def main():
+    # 先写「运行中」标记（E26）：崩溃时它会留在原地，告警方据此判断「没跑完」
+    _write_running_marker()
     print("════════════════════════════════════════════")
     print(" 快速健康子集  " + __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     print("════════════════════════════════════════════")
@@ -329,6 +378,11 @@ def main():
     print("════════════════════════════════════════════")
     _persist_log()
     _write_result_file()
+    # 正常跑完 → 移除「运行中」标记
+    try:
+        os.remove(RUNNING_FILE)
+    except Exception:
+        pass
     return 1 if FAILED else 0
 
 

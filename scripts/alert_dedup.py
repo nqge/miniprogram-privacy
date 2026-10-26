@@ -16,6 +16,7 @@
 状态文件：/root/.openclaw/workspace/.alert-state.json
 """
 
+import datetime
 import hashlib
 import json
 import os
@@ -26,10 +27,13 @@ from pathlib import Path
 
 STATE = Path("/root/.openclaw/workspace/.alert-state.json")
 SUPPRESS_SECONDS = 6 * 3600  # 同一故障 6 小时内只告警一次
+# 结果文件超过这个时长就当作「陈旧」，不信任它（E26：崩溃在写文件前 → 读到上次的成功结果 → 告警被静默吞掉）
+STALE_AFTER_SECONDS = 15 * 60
 ALERT = "/root/.openclaw/workspace/scripts/quick_health_alert.py"
 
 
 RESULT_FILE = Path("/root/.openclaw/workspace/logs/quick-health-result.json")
+RUNNING_FILE = Path("/root/.openclaw/workspace/logs/quick-health-running.json")
 
 
 def current_failures():
@@ -39,13 +43,54 @@ def current_failures():
     导致每次成功巡检实际跑两遍（8 秒 → 16 秒），
     而且两次结果可能不一致（竞态会让状态错乱）。
 
-    退化路径：结果文件不存在（比如从没跑过）→ 自己跑一次。
+    退化路径：结果文件不存在/陈旧 → 自己跑一次。
+
+    ⚠️ 新鲜度校验（2026-10-26 加，E26）：
+    结果文件可能是「上一次成功运行」留下的 —— 当 quick_health.py
+    在写文件「之前」就崩了/被 kill/超时，文件根本没被更新。
+    这时直接读它会得到「无故障」，**告警被静默吞掉，
+    恰恰发生在系统最坏的时候**（实测已复现）。
     """
+    # ⚠️ 先看「运行中」标记（E26）：如果它还在，说明上次巡检没跑完
+    #（崩溃/被 kill/超时）—— 这本身就是一种失败，必须告警，
+    # 不能因为结果文件里留着上次的成功态就当没事发生。
+    if RUNNING_FILE.exists():
+        try:
+            r = json.loads(RUNNING_FILE.read_text(encoding="utf-8"))
+            age = time.time() - RUNNING_FILE.stat().st_mtime
+            if 0 <= age <= STALE_AFTER_SECONDS:
+                print("[alert-dedup] 检测到未完成的巡检运行（running 标记仍在）")
+                return [
+                    f"巡检脚本未完成运行（可能崩溃/超时/被 kill）"
+                    f" — startedAt={r.get('startedAt')} pid={r.get('pid')}"
+                ], 1
+            else:
+                print(f"[alert-dedup] running 标记已过期（{int(age)}s 前），忽略")
+        except Exception as e:
+            print(f"[alert-dedup] running 标记读取失败（{type(e).__name__}）")
+
     try:
         data = json.loads(RESULT_FILE.read_text(encoding="utf-8"))
-        return list(data.get("failures") or []), 1 if data.get("failed") else 0
-    except Exception:
-        pass
+        started = data.get("startedAt")
+        age_ok = True
+        if started:
+            try:
+                ts = datetime.datetime.strptime(started, "%Y-%m-%d %H:%M:%S")
+                age = (datetime.datetime.now() - ts).total_seconds()
+                age_ok = 0 <= age <= STALE_AFTER_SECONDS
+            except Exception:
+                age_ok = False
+        else:
+            try:
+                age = time.time() - RESULT_FILE.stat().st_mtime
+                age_ok = 0 <= age <= STALE_AFTER_SECONDS
+            except Exception:
+                age_ok = False
+        if age_ok:
+            return list(data.get("failures") or []), 1 if data.get("failed") else 0
+        print(f"[alert-dedup] 结果文件已陈旧（startedAt={started}），改为自行重跑")
+    except Exception as e:
+        print(f"[alert-dedup] 读取结果文件失败（{type(e).__name__}），改为自行重跑")
     r = subprocess.run(
         ["/usr/bin/python3", "/root/.openclaw/workspace/scripts/quick_health.py"],
         capture_output=True, text=True, timeout=180,
