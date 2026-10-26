@@ -31,7 +31,8 @@ NOTES = {
     'C': '索引完整性 + Embeddings 可用',
     'D': 'announce 型必须 delivered=True（这是曾经静默失效的环节）',
     'E': 'GIT_CREDENTIALS.md / gh hosts.yml（**需牛哥哥本人吊销重签，不要自己改**）',
-    'F': '「每日学习」小节是否只有 1 个',
+    'F': '「每日学习」/「每日反思」小节是否重复（**查全部每日笔记文件**，'
+         '不只今天 —— 只查重复不查缺失，缺失可能是合法的）',
     'G': '本地与远端一致',
     'H': '真实跑一次记忆检索 + API',
     'I': '茶馆蒸馏进度 + 队列自洽性',
@@ -99,9 +100,19 @@ def main():
         if start == -1:
             print('指令里找不到「当前 FAIL 的」块')
             sys.exit(1)
-        end = cur.find('\n\n', cur.find('- M ', start))
-        if end == -1:
-            end = len(cur)
+        # 2026-10-27 (E38)：原来用 `cur.find('- M ', start)` 定位块尾 ——
+        # 硬编码了「M 是最后一组」。组数变化后（比如 M 之后又加了 N-S），
+        # 这个锚点会指向错误的行，导致替换范围错乱。
+        # 修法：找块内**最后一条** `- X ` 列表项，再从它后面截断。
+        bullets = list(re.finditer(r'^- ([A-Z]) ', cur[start:], re.M))
+        if not bullets:
+            print('指令块里找不到列表项')
+            sys.exit(1)
+        last = bullets[-1]
+        # 截到**行尾**而不是 match.end() —— match 只到 "- S "，
+        # 后面还跟着 S 的说明文字，直接截会把它截成两半再拼上 → 重复
+        line_end = cur.find('\n', start + last.end())
+        end = line_end if line_end != -1 else len(cur)
         new = cur[:start] + block + cur[end:]
         ok = update_cron(new)
         print(f'{"✅ 已更新" if ok else "❌ 失败"}（{len(groups)} 组）')
