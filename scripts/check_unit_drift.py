@@ -156,6 +156,46 @@ def main():
             else:
                 bad(f"{unit} 的 {prop} 指向异常：{val[:80]}")
 
+    print("【敏感文件权限】")
+    # 2026-10-26 实测：systemd 默认 UMask=0022 → 会话日志建成 644（全局可读），
+    # 而会话日志里会带进 token（实测 7 个文件含完整 GitHub PAT）。
+    # 已加 UMask=0077 + 目录 700，这里断言防止复发。
+    sess_dir = "/root/.openclaw/agents/main/sessions"
+    try:
+        dmode = os.stat(sess_dir).st_mode & 0o777
+        if dmode & 0o077:
+            bad(f"sessions 目录权限 {oct(dmode)[2:]} —— 其他用户可列目录（应为 700）")
+        else:
+            ok(f"sessions 目录权限 {oct(dmode)[2:]}（仅 root 可读写）")
+
+        umask_val = unit_value("openclaw-gateway.service", "UMask")
+        if umask_val in ("0077", "077"):
+            ok(f"gateway UMask={umask_val}（新建会话日志默认 600）")
+        else:
+            bad(f"gateway UMask={umask_val or '未设置'} —— 新建会话日志会是 644（全局可读）")
+
+        # 抽查含 token 的会话日志
+        leaked = []
+        try:
+            for fn in os.listdir(sess_dir):
+                if not fn.endswith(".jsonl") and ".jsonl" not in fn:
+                    continue
+                fp = os.path.join(sess_dir, fn)
+                try:
+                    m = os.stat(fp).st_mode & 0o777
+                    if m & 0o077:
+                        leaked.append(f"{fn}({oct(m)[2:]})")
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        if leaked:
+            bad(f"{len(leaked)} 个会话日志权限过宽：{', '.join(leaked[:3])}")
+        else:
+            ok("所有会话日志权限均不含组/其他可读")
+    except FileNotFoundError:
+        ok("sessions 目录不存在（跳过）")
+
     print("【定时器调度】")
     for timer, props in TIMERS.items():
         for prop, sub, desc in props:
