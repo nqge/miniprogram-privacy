@@ -1158,6 +1158,15 @@ echo "【M】Provider 韧性与 fallback 有效性"
 # 状态字段看不出这个问题：配置齐全、模型存在、fallbackConfigured=True，
 # 但只要 provider 本身欠费/限流，兜底就是假的。
 # 这属于 E20「验证的对象错了」—— 该验的是「跨 provider 吗」，不是「配了吗」。
+#
+# 2026-10-27 06:40 补充：除了「兜底无效」，还有**第二重后果** ——
+# **并发互相拖慢**。实测（同账号 6 个并发请求，256 token 输出）：
+#   单个请求        → 1.8s
+#   6 个并发        → 最慢的到 **7.0s（3.9 倍）**
+# 而实测到 daily-learning 的 agent turn 有一次**单次 LLM 调用等了 353 秒**，
+# 且那段时间正好是 backup-audit 超时失败的时段 —— **同一个 MiniMax 账号被并发占用**。
+# → 也就是说：不仅 provider 挂了会全挂，**provider 变慢也会全慢**，
+#   一个慢请求会拖垮所有任务（包括每天 07:00 的巡检）。
 
 prov_report=$(python3 - << 'PY2' 2>/dev/null
 import json
