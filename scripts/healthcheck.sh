@@ -739,6 +739,68 @@ while IFS= read -r line; do
 done <<< "$mem_report"
 PASS=$((PASS + 1))
 
+echo "【Q】cron 指令是否与脚本同步（防过期手册）"
+
+# 2026-10-27 03:30 补（E20/E31 的又一次实例）：
+# cron 指令里手写的「13 组断言 A–M」在加了 N/O/P 三组后**没同步** ——
+# 明早 07:00 真出故障时，agent 拿到的是一份**过期的手册**，
+# 新组（N/O/P）的失败它根本不知道怎么解释。
+#
+# 这正是 E20「验证了脚本却没验证指令」的翻版。
+# 解法：指令清单由 `scripts/gen_healthcheck_instruction.py` 从脚本生成，
+# 这里**自动核对**生成结果与 cron 里的实际内容是否一致。
+
+inst_report=$(python3 - << 'PY4' 2>/dev/null
+import json, re, subprocess, sys
+sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+try:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "gen", "/root/.openclaw/workspace/scripts/gen_healthcheck_instruction.py")
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    groups = gen.extract_groups()
+    block = gen.build_block(groups)
+except Exception as e:
+    print(f"FAIL 生成器加载失败（{type(e).__name__}）")
+    raise SystemExit(1)
+
+try:
+    r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
+                       capture_output=True, text=True, timeout=60)
+    jobs, _ = json.JSONDecoder().raw_decode(r.stdout[r.stdout.find('['):])
+    msg = None
+    for j in jobs:
+        if j.get('id') == gen.CRON_ID:
+            msg = (j.get('payload') or {}).get('message', '')
+            break
+    if msg is None:
+        print("FAIL 找不到 healthcheck cron 任务")
+        raise SystemExit(1)
+except Exception as e:
+    print(f"FAIL 读不到 cron 指令（{type(e).__name__}）")
+    raise SystemExit(1)
+
+missing = [g for g, _ in groups if f'- {g} ' not in msg]
+if missing:
+    print(f"FAIL cron 指令缺 {len(missing)} 组说明（{', '.join(missing)}）"
+          f" —— 跑 `python3 scripts/gen_healthcheck_instruction.py --update` 同步")
+else:
+    n_decl = len(re.findall(r'^- ([A-Z]) ', msg, re.M))
+    if n_decl != len(groups):
+        print(f"FAIL cron 指令列了 {n_decl} 组，脚本实际 {len(groups)} 组 —— 需同步")
+    else:
+        print(f"PASS cron 指令与脚本同步（{len(groups)} 组）")
+PY4
+)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$inst_report"
+PASS=$((PASS + 1))
+
 echo "【P】每日笔记日期归属（跨日写入检测）"
 
 # 2026-10-27 03:00 补：会话跨过零点后，我**继续往 10-26.md 里写**，
