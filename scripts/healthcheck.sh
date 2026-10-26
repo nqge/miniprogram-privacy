@@ -739,6 +739,103 @@ while IFS= read -r line; do
 done <<< "$mem_report"
 PASS=$((PASS + 1))
 
+echo "【R】cron 任务「脚本耗时 vs 超时」对比（防把等待慢当成任务慢）"
+
+# 2026-10-27 04:40 补（E35）：
+# backup-audit 连续两次「超时失败」，但脚本只要 **0.18 秒**。
+# 真根因不是任务慢，是 agent 用 process(poll, timeout=120000~300000)
+# 每次**等满** timeout → 3 次 poll ≈ 510s → 必然撞上 job 超时。
+#
+# 所以这条断言的核心是**比值**：脚本耗时 vs timeout 差几个数量级，
+# 就说明慢的不是任务，而是「怎么等」。调 timeout 是第二道防线，
+# 第一道是「别等满」。
+#
+# 判据：
+#   1) 脚本耗时 < 5s 但 job 因超时失败 → FAIL（等待方式的问题，不是任务的问题）
+#   2) timeoutSeconds < 脚本耗时的 10 倍 → WARN（余量太小）
+
+to_report=$(python3 - << 'PY5' 2>/dev/null
+import json, os, subprocess, time
+JOBS = '/root/.openclaw/cron/jobs.json'
+WS = '/root/.openclaw/workspace'
+failed = 0
+
+# 脚本路径表：cron 任务名 → 脚本
+SCRIPTS = {
+    'backup-audit': 'scripts/backup_audit.sh',
+    'healthcheck': 'scripts/healthcheck.sh',
+}
+
+try:
+    d = json.load(open(JOBS, encoding='utf-8'))
+    jobs = d if isinstance(d, list) else d.get('jobs', [])
+except Exception as e:
+    print(f"FAIL 读不到 jobs.json（{type(e).__name__}）")
+    raise SystemExit(1)
+
+# 1) 超时失败 + 脚本很快 → 典型「等法」问题
+timed_out = []
+for j in jobs:
+    st = j.get('state') or {}
+    if st.get('lastRunStatus') != 'error':
+        continue
+    if 'timed out' not in str(st.get('lastError') or ''):
+        continue
+    name = j.get('name')
+    rel = SCRIPTS.get(name)
+    if not rel:
+        continue
+    path = os.path.join(WS, rel)
+    if not os.path.exists(path):
+        continue
+    t0 = time.time()
+    try:
+        subprocess.run(['bash', path], capture_output=True, timeout=120)
+    except Exception:
+        pass
+    dur = time.time() - t0
+    tos = (j.get('payload') or {}).get('timeoutSeconds') or 0
+    if dur < 5:
+        timed_out.append((name, dur, tos))
+
+if timed_out:
+    for name, dur, tos in timed_out:
+        print(f"FAIL {name} 脚本只要 {dur:.2f}s 却因等待超时失败"
+              f"（timeout {tos}s）—— 慢的是「等法」不是任务："
+              f"用短 timeout 多次 poll，不要一次等满")
+    failed = 1
+else:
+    print("PASS 无「脚本很快但超时失败」的任务")
+
+# 2) timeout 余量对比
+tos_map = {}
+for j in jobs:
+    p = j.get('payload') or {}
+    if p.get('kind') == 'agentTurn':
+        tos_map[j.get('name')] = p.get('timeoutSeconds') or 0
+if tos_map:
+    vals = sorted(tos_map.values())
+    lo, hi = vals[0], vals[-1]
+    if hi > 0 and lo < hi * 0.6:
+        tight = [f"{k}={v}s" for k, v in tos_map.items() if v == lo]
+        print(f"WARN cron 超时余量差异大（最小 {lo}s vs 最大 {hi}s）：{', '.join(tight)}"
+              f" —— 手写的 timeout 彼此不可比")
+    else:
+        print(f"PASS cron 超时余量合理（{lo}s–{hi}s）")
+print(f"__TO_FAILED__={failed}")
+PY5
+)
+to_fail=$(echo "$to_report" | grep -oP '__TO_FAILED__=\K[0-9]+')
+to_fail=${to_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$to_report"
+PASS=$((PASS + 1))
+
 echo "【Q】cron 指令是否与脚本同步（防过期手册）"
 
 # 2026-10-27 03:30 补（E20/E31 的又一次实例）：

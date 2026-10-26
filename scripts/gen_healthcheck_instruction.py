@@ -43,6 +43,8 @@ NOTES = {
     'O': 'MEMORY.md 与 L1 主库声明的条目数是否与实际文件数一致',
     'P': '某个每日笔记里的小节日期晚于文件名（跨零点写错文件）',
     'Q': 'cron 指令里的 FAIL 含义清单是否与 healthcheck.sh 的实际组数一致（防过期手册）',
+    'R': 'cron 任务超时余量：某任务最近因超时失败（脚本 0.2s 但 agent turn 跑了 300s，'
+         '时间全耗在 LLM 推理）→ 提高该任务 timeoutSeconds；手写的 timeout 值彼此不可比',
 }
 
 
