@@ -59,7 +59,9 @@ else bad "飞书 API token 获取失败 — ${fs_out}"; fi
 # A2 GitHub API（茶馆监控依赖）—— 用认证请求，并区分「限流」与「不可达」
 # 2026-10-26 教训：匿名额度只有 60 次/小时/IP，耗尽后 403 看起来像权限问题，
 # 极难一眼看出。现在读 gh CLI 的 token 换成 5000 次/小时，并报实际额度。
-GH_TOKEN=$(grep -oP '(?<=oauth_token: ).*' /root/.config/gh/hosts.yml 2>/dev/null | head -1)
+# token 统一从 scripts/gh_auth.py 取（单一真相源）——
+# 之前这里自己抄了一遍正则，与另外两个脚本重复，gh 改格式时会三处同时静默失效
+GH_TOKEN=$(python3 /root/.openclaw/workspace/scripts/gh_auth.py --token 2>/dev/null)
 gh_hdr=(-H "User-Agent: openclaw-healthcheck" -H "Accept: application/vnd.github+json")
 [ -n "$GH_TOKEN" ] && gh_hdr+=(-H "Authorization: Bearer $GH_TOKEN")
 gh_rl=$(curl -s -m 15 "${gh_hdr[@]}" https://api.github.com/rate_limit 2>/dev/null)

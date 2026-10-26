@@ -83,17 +83,13 @@ def check_external_apis():
         bad(f"飞书 API 不可用（{type(e).__name__}）")
 
     # GitHub（茶馆监控依赖）—— 用认证请求，匿名额度只有 60 次/小时/IP
-    gh_headers = {"User-Agent": "openclaw-healthcheck", "Accept": "application/vnd.github+json"}
-    tok = None
     try:
-        import re as _re
-        _t = Path("/root/.config/gh/hosts.yml").read_text(encoding="utf-8")
-        _m = _re.search(r"oauth_token:\s*(\S+)", _t)
-        if _m:
-            tok = _m.group(1)
-            gh_headers["Authorization"] = f"Bearer {tok}"
+        import sys as _sys
+        _sys.path.insert(0, f"{WS}/scripts")
+        from gh_auth import github_headers
+        gh_headers = github_headers()
     except Exception:
-        pass
+        gh_headers = {"User-Agent": "openclaw-healthcheck"}
     try:
         req = urllib.request.Request(
             "https://api.github.com/rate_limit", headers=gh_headers
