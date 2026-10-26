@@ -186,6 +186,31 @@ def check_provider_health():
         bad("provider 检查未通过（详见上方）")
 
 
+def _check_unit_integrity():
+    """检查 systemd 单元的关键指令是否真的存在（不是只出现在注释里）。
+
+    2026-10-26 踩坑：加 ExecStartPost 时重写了整个 .service 文件，
+    把 [Unit] 段的 `OnFailure=` 真实指令弄丢了 —— 但因为**注释里还留着这行文字**，
+    grep 一下就能看到「有 OnFailure」，看起来一切正常。
+    结果：故障时告警单元**完全没被触发**，而服务照常报 failed —— 典型的静默失效。
+
+    systemctl show -p OnFailure 能看到真正生效的指令值，这才是可信来源。
+    """
+    print("【systemd 单元完整性】")
+    out, rc = cmd(
+        ["/usr/bin/systemctl", "--user", "show", "openclaw-quick-health.service",
+         "-p", "OnFailure", "--value"], timeout=15
+    )
+    val = (out or "").strip()
+    if not val:
+        bad("openclaw-quick-health.service 的 OnFailure 指令丢失 —— 故障时不会告警")
+        return
+    if "quick-health-alert" not in val:
+        bad(f"OnFailure 指向了意外的目标：{val}")
+        return
+    ok(f"OnFailure → {val}")
+
+
 def _persist_log():
     """把结果追加到 logs/quick-health.log —— journald 会轮转，日志文件能保留历史。
 
@@ -216,6 +241,7 @@ def main():
     check_memory_index()
     check_provider_health()
     check_cron_delivery()
+    _check_unit_integrity()
     print("════════════════════════════════════════════")
     print(f" 结果: PASS={PASSED}  FAIL={len(FAILED)}")
     if FAILED:

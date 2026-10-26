@@ -577,7 +577,7 @@
 - **全 provider 失效**（= 今天上午真实场景）→ ❌ FAIL「没有任何可用 provider」+ exit 1 ✅
 - 端到端：FAIL=3 → systemd exit 1 → OnFailure → 飞书 code:0 success ✅
 **教训**: 「配置存在」≠「能力可用」；主动探测 1 token，失效发现成本极高 —— 这笔账很好算
-**巡检现状**: 12 组断言（A-L），PASS=38 FAIL=2 WARN=1
+**巡检现状（快照）**: 12 组断言（A-L），PASS=38 FAIL=2 WARN=1
 **残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
 
 ### 2026-10-26 15:20 心跳 — 修掉自己刚引入的两个设计缺陷
@@ -588,5 +588,23 @@
   → 追加到 `logs/quick-health.log`（已 gitignore）
 **教训**: 做完新机制要回头审自己的设计（缺陷2 个都是我自己发现的，不是别人指出的）；
   告警必须带恢复通知
+**巡检现状（快照）**: 12 组断言（A-L），PASS=38 FAIL=2 WARN=1
+**残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
+
+### 2026-10-26 15:25 心跳 — 抓到「改配置弄丢 OnFailure」的静默失效
+**起因**: 端到端测「恢复通知」时发现没发出来
+**🔴 根因**: 为加 ExecStartPost 重写了整个 .service，把 [Unit] 段的 `OnFailure=` 真实指令弄丢了
+   **最阴险**: 注释里还留着「OnFailure」这行文字 → grep 能搜到 → 看起来正常
+   → 故障时告警单元完全不被触发 → 服务照常报 failed → 静默失效
+   （同族问题第三次：手动vs定时、shellvs systemd、指令vs注释）
+**修法**:
+1. 恢复 `OnFailure=` 真实指令（保留注释）
+2. **加断言防复发**: `systemctl show -p OnFailure --value` 取真正生效的值（不 grep 文件）
+   注入故障验证: 删指令 → FAIL → 恢复 → PASS ✅
+3. 顺带修好「恢复通知不发」: OnFailure 只在失败时触发，成功时不跑
+   → 现在两条路都走 dedup：失败走 OnFailure、成功走 ExecStartPost
+   端到端: 故障 code:0 success ✅ / 恢复 code:0 success ✅
+**教训**: 注释不是指令 —— 验证要问「实际生效的是什么」；
+  改配置用最小 diff（加东西应该追加，不是重写）
 **巡检现状**: 12 组断言（A-L），PASS=38 FAIL=2 WARN=1
 **残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
