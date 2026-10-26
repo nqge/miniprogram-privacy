@@ -16,6 +16,7 @@
 
 import glob
 import json
+import os
 import re
 import subprocess
 import sys
@@ -63,9 +64,14 @@ def main():
             print(f"  ❌ FAIL  {eid} 缺少首行关键词")
             continue
         q = m.group(1)[:26]
+        # 日志降噪：openclaw CLI 每次调用会重新注册全部插件，INFO 级打 6+ 行。
+        # 用环境变量控制（改 openclaw.json 会触发 loadConfig 递归）。
+        # setdefault：外部已设的值不被覆盖。
+        env = dict(os.environ)
+        env.setdefault("OPENCLAW_LOG_LEVEL", "warn")
         r = subprocess.run(
             ["openclaw", "memory", "search", q, "--json"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=120, env=env,
         )
         try:
             rs = json.loads(r.stdout[r.stdout.find("{"):]).get("results", [])

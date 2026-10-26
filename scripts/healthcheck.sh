@@ -18,6 +18,13 @@
 
 set -uo pipefail
 
+# 日志降噪 —— 2026-10-26 实测：
+# 每次 `openclaw` CLI 调用都会重新注册全部插件，INFO 级打 6+ 行
+# 「feishu_xxx: Registered ...」，占当日日志 87%（24158/27676 行）。
+# 实测 3 次 `openclaw cron list`：默认 27008 字节/次 → warn 级 5735 字节/次（-79%）。
+# 只能用环境变量控制（改 openclaw.json 的 logging 段会触发 loadConfig 递归）。
+export OPENCLAW_LOG_LEVEL="${OPENCLAW_LOG_LEVEL:-warn}"
+
 WORKSPACE="/root/.openclaw/workspace"
 CFG="/root/.openclaw/openclaw.json"
 PROXY_HEALTH="http://127.0.0.1:8799/health"

@@ -7,15 +7,23 @@
 """
 
 import json
+import os
 import subprocess
 import sys
 
 
 def main() -> int:
+    # 日志降噪：每次 CLI 调用会重新注册全部插件，INFO 级打 6+ 行
+    # 「feishu_xxx: Registered ...」，占当日日志 87%。
+    # 实测 27008 字节/次 → 5735 字节/次（-79%）。
+    # 注意：不能改 openclaw.json 里的 logging 段（那会触发 loadConfig 递归），
+    # 只能用环境变量，且只影响本子进程。
+    env = dict(os.environ)
+    env.setdefault("OPENCLAW_LOG_LEVEL", "warn")
     try:
         r = subprocess.run(
             ["openclaw", "cron", "list", "--json"],
-            capture_output=True, text=True, timeout=90,
+            capture_output=True, text=True, timeout=90, env=env,
         )
         d = json.loads(r.stdout[r.stdout.find("{"):])
     except Exception as e:

@@ -47,7 +47,12 @@ def bad(msg):
 
 def cmd(args, timeout=30):
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        # 日志降噪：每次 openclaw CLI 调用都会重新注册全部插件，
+        # INFO 级打 6+ 行，占当日日志 87%（实测 27008 → 5735 字节/次）。
+        # 用环境变量而非改配置文件（改 openclaw.json 会触发 loadConfig 递归）。
+        env = dict(os.environ)
+        env.setdefault("OPENCLAW_LOG_LEVEL", "warn")
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
         return r.stdout, r.returncode
     except Exception:
         return "", 1
