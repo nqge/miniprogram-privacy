@@ -79,3 +79,60 @@ git ls-remote origin   # 验证
 
 _最后更新: 2026-10-26 01:25_
 _维护者: 小红🌸_
+
+---
+
+## 🧠 记忆检索（memorySearch）— 2026-10-26 打通
+
+### 架构
+```
+OpenClaw memorySearch (provider=openai)
+   ↓ POST {baseUrl}/embeddings  {model, input[]}
+tools/minimax_embed_proxy.mjs  ← 协议翻译 (127.0.0.1:8799, systemd user service)
+   ↓ POST https://api.minimaxi.com/v1/embeddings  {model, texts[], type:"db"}
+MiniMax embo-01  → {vectors: number[][]}  1536 维
+   ↓ 翻译回 OpenAI 格式 {data:[{embedding}]}
+OpenClaw 向量库 (sqlite-vec)
+```
+
+### 运维
+```bash
+systemctl --user status openclaw-embed-proxy.service   # 代理状态
+journalctl --user -u openclaw-embed-proxy.service -f    # 实时日志
+curl -s http://127.0.0.1:8799/health                     # 健康检查
+openclaw memory status --deep                           # 索引状态
+openclaw memory index --force                           # 重建索引
+```
+
+### ⚠️ 三个必须记住的坑
+
+1. **MiniMax `type` 是向量空间开关**（不是标签）
+   `db` 与 `query` 是两个不同空间，同一文本跨空间余弦仅 **0.74**。
+   索引与检索必须用**同一个 type**，否则排序被系统性稀释（0.869 → 0.814）。
+   → 代理里统一写死 `type: "db"`。
+
+2. **改 embedding 参数后必须清缓存**
+   `openclaw memory index --force` 会**复用 embedding cache**，不清缓存就等于没重建。
+   ```bash
+   python3 -c "import sqlite3; db=sqlite3.connect('/root/.openclaw/memory/main.sqlite'); db.execute('DELETE FROM embedding_cache'); db.commit()"
+   ```
+
+3. **memorySearch 会递归索引 `memory/` 的所有子目录**（实测确认）
+   → 原始数据 dump 必须放到 `memory/` **外面**。
+   茶馆摘要因此改写到 `teahouse-raw/`。
+
+### 当前调参（MiniMax 尺度，非 OpenAI 默认值）
+```json5
+agents.defaults.memorySearch = {
+  provider: "openai", model: "embo-01",
+  remote: { baseUrl: "http://127.0.0.1:8799/v1/", apiKey: "local-proxy" },
+  fallback: "none",
+  query: { minScore: 0.08, maxResults: 6,
+           hybrid: { enabled: true, vectorWeight: 0.75, textWeight: 0.25 } },
+  chunking: { tokens: 200, overlap: 40 }
+}
+```
+- `minScore=0.08` 不是拍脑袋 —— 按正/负样本分数分布标定，保留 8/8 正样本
+- `chunking.tokens=200`（默认 400）实测最优；一个 chunk 混两个主题会把向量平均掉
+- 上游 `buildFtsQuery` 用 **AND 拼接带引号短语** → 多词中文查询 BM25 直接 0 命中
+  → 检索几乎全靠向量，这也解释了为什么 minScore 要调得这么低

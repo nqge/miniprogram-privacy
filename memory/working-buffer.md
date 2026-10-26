@@ -89,3 +89,10 @@
 - log_cleanup.sh 的 mtime 判龄规则永不触发（轮转按大小不按天）→ 重写为槽位日期判龄
 - `/tmp/openclaw` 77M → 2.5M（删 4 个僵尸槽位 + 剥离 33911 行历史残留）
 - 提交推送 `90371ef`
+
+## ✅ 09:10 补充
+- **记忆检索从「完全不可用」恢复到可用**（之前从 2026-03 起就是死的，只是没人验证）
+- 新增 `tools/minimax_embed_proxy.mjs` + systemd service `openclaw-embed-proxy.service`
+- 新增 `scripts/tune_memory_search.py`（参数扫描）
+- 茶馆摘要改写到 `teahouse-raw/`（不再污染索引），加保留 5 份的清理
+- memorySearch: chunking.tokens=200, minScore=0.08, hybrid 0.75/0.25

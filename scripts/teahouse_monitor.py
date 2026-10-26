@@ -21,7 +21,14 @@ from pathlib import Path
 REPO = "ythx-101/openclaw-qa"
 API = f"https://api.github.com/repos/{REPO}/issues"
 STATE_FILE = Path("/root/.openclaw/workspace/memory/teahouse_state.json")
-OUT_DIR = Path("/root/.openclaw/workspace/memory")
+# 原始社区摘要是「外部内容 dump」，不是我的记忆。
+# 放在 memory/ 下会：
+#   1. 被 memorySearch 索引 —— 80KB/份、4 小时一份，实测占据 64% 索引块，
+#      把真正的个人记忆（称呼、偏好、决策）挤出检索结果
+#   2. 无限累积（无清理逻辑）
+# 注意：memorySearch 会**递归**索引 memory/ 的所有子目录（实测确认），
+# 所以必须放到 memory/ **外面**。值得记的结论由每日笔记提炼进 memory/。
+OUT_DIR = Path("/root/.openclaw/workspace/teahouse-raw")
 NOISE_TITLE = re.compile(r"^\s*test\s*$", re.I)
 HEADERS = {
     "Accept": "application/vnd.github+json",
@@ -132,6 +139,29 @@ def main():
     print(f"[teahouse] 摘要已写入: {digest_path}")
     for i in fresh[:8]:
         print(f"  * #{i['number']} {i['title'][:60]}")
+
+    prune_old_digests()
+
+
+def prune_old_digests(keep=5):
+    """只保留最近 keep 份原始摘要，避免无限膨胀。
+
+    这些是外部社区内容 dump，价值在于「已提炼进每日笔记」，原始副本不必长期留存。
+    """
+    try:
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        digests = sorted(OUT_DIR.glob("teahouse_summary_*.md"), key=lambda p: p.stat().st_mtime)
+        removed = 0
+        for p in digests[:-keep]:
+            try:
+                p.unlink()
+                removed += 1
+            except OSError:
+                pass
+        if removed:
+            print(f"[teahouse] 清理旧摘要 {removed} 份（保留最近 {keep} 份）")
+    except Exception as e:  # 清理失败不应影响主流程
+        print(f"[teahouse] 清理旧摘要时出错（忽略）: {e}")
 
 
 if __name__ == "__main__":

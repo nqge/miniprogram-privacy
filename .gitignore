@@ -11,3 +11,7 @@ GIT_CREDENTIALS.md
 
 # 本地运行时状态目录（不入库）
 /.openclaw/
+
+# 茶馆原始摘要 dump —— 外部社区内容，每份 80KB，无限增长
+# 值得记的结论已提炼进 memory/ 每日笔记，这里不入库
+/teahouse-raw/*.md

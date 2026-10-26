@@ -282,3 +282,17 @@
 4. 提交推送 `90371ef`，远端验证一致
 **教训**: 「脚本存在」≠「脚本会跑」；清理类工具必须先验证**判龄信号本身有效**，不能假设 mtime 可用
 **残留项**: 4 项（见 `待决策选项单.md`），第 1 项吊销 PAT 建议尽快
+
+### 2026-10-26 09:10 心跳 — 记忆检索恢复（重大成果）
+**问题**: `doctor` 报 `Embeddings: unavailable`, 索引 0/11 文件 → AGENTS.md 的「强制 recall」一直是死的
+**解法**: 用**已有的 MiniMax key**（无需新凭证）+ 自写协议翻译代理 `tools/minimax_embed_proxy.mjs`
+（systemd user service `openclaw-embed-proxy.service`, 127.0.0.1:8799）
+**4 个坑（均实测定位）**:
+1. OpenClaw 请求 `{baseUrl}/embeddings` → 代理须同时接受 `/embeddings` 与 `/v1/embeddings`
+2. MiniMax `type` 是**向量空间开关**（db/query 空间余弦仅 0.74）→ 索引与检索必须统一 type，最终全用 `db`
+3. `memory index --force` 会复用 embedding cache → 改 type 后必须 `DELETE FROM embedding_cache` 再重建
+4. 茶馆摘要占 64% 索引块 → 移到 `teahouse-raw/`（memorySearch 递归索引子目录，必须放 memory/ 外）+ 只留最近 5 份
+**调参**: `chunking.tokens` 400→200（实测最优）；`minScore` 0.35→0.08（按正负样本分布标定）
+**结果**: 索引 0/11 → 11/11 · 80 chunks；`memory_search` 工具实测返回正确 chunk（称呼/中文交流/供应链投毒均精确命中）
+**教训**: 「enabled」≠「能用」；协议适配优于申请新凭证；每个参数都要实测数据定，不能用默认值
+**残留项**: 4 项（见 `待决策选项单.md`），第 1 项吊销 PAT 建议尽快
