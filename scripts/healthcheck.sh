@@ -97,6 +97,19 @@ else
   bad "quick-health 的 OnFailure 指令丢失或指向异常 — 故障时不会告警（$qof）"
 fi
 
+# L1 经验库检索验证 —— 每条经验都必须能被自己的原文措辞搜到
+# 2026-10-26 实测：19 条里有 4 条塞在长文件里检索不到（E17 的问题），
+# 拆成独立文件后 19/19 全部命中。写下来的经验搜不到 = 等于没写。
+l1_out=$(timeout 280 python3 /root/.openclaw/workspace/scripts/verify_l1_retrieval.py 2>/dev/null)
+l1_rc=$?
+l1_line=$(echo "$l1_out" | grep "结果:")
+if [ "$l1_rc" -eq 0 ]; then
+  ok "L1 经验库检索验证通过（$l1_line）"
+else
+  bad "L1 经验库有经验检索不到 —— $l1_line"
+  echo "$l1_out" | grep '❌' | sed 's/^/        /' | head -5
+fi
+
 # 完整的 systemd 配置漂移检查（单元 enabled / 脚本存在 / 关键指令生效 / 定时器调度）
 # 覆盖「配置文件里的东西 ≠ 实际生效的东西」这一整类风险
 drift_out=$(python3 /root/.openclaw/workspace/scripts/check_unit_drift.py 2>/dev/null)
