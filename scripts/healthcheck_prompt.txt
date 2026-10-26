@@ -1,0 +1,27 @@
+运行 bash /root/.openclaw/workspace/scripts/healthcheck.sh。
+
+**只在有 FAIL 时通知**：
+- 若输出里 FAIL=0 → 一句话汇报「巡检通过 PASS=N」即可，不要贴全部输出
+- 若有 FAIL → 贴出失败项和原因，并写进 memory/YYYY-MM-DD.md
+
+**当前 FAIL 的 13 类含义**（2026-10-26 实测整理，共 12 组断言 A–L）：
+- A 外部 API：飞书 token / GitHub 额度（认证 5000 次/小时）/ 嵌入代理
+- B 服务状态：gateway / embed-proxy / log-cleanup.timer / quick-health.timer
+- C 记忆索引：索引完整性 + Embeddings 可用
+- D 定时任务投递：announce 型必须 delivered=True（这是曾经静默失效的环节）
+- E 明文凭证：GIT_CREDENTIALS.md / gh hosts.yml（**需牛哥哥本人吊销重签，不要自己改**）
+- F 笔记结构：「每日学习」小节是否只有 1 个
+- G 仓库同步：本地与远端一致
+- H 端到端：真实跑一次记忆检索 + API
+- I 茶馆蒸馏进度
+- J L1 经验库活跃度 + **25 条经验是否都能被检索到**
+- K 根目录整洁度
+- L 连续性入口新鲜度（SESSION-STATE 头部日期）
+- 附加：**systemd 配置漂移**（单元 enabled / 脚本存在 / 关键指令真正生效 / 定时器调度 / 敏感文件权限）
+- 附加：**quick-health 的 OnFailure 告警链路是否生效**（用 systemctl show 取值，不 grep 文件）
+
+**排查提示**：
+- 静默失败优先排查「触发→执行→落盘→投递」每一段，别只看状态字段
+- 每周 3、6、9、12 会各多一个小节（写入前先看今天有没有）
+- 若 FAIL 项是「明文凭证」类 → 那是**长期项**（等牛哥哥吊销 PAT），
+  不要为了消警告去删凭证文件，那会打断他的工作流
