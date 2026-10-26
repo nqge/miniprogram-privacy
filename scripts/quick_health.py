@@ -162,6 +162,30 @@ def check_cron_delivery():
         ok(f"{checked} 个定时任务状态正常")
 
 
+def check_provider_health():
+    """provider 凭证是否还活着 —— 主动探测，不等调用时才发现失效。
+
+    2026-10-26 上午三个 provider 全失效，状态字段一直显示正常。
+    """
+    print("【Provider 凭证】")
+    r = subprocess.run(
+        ["/usr/bin/python3", f"{WS}/scripts/check_provider_health.py"],
+        capture_output=True, text=True, timeout=90,
+    )
+    for ln in (r.stdout or "").split("\n"):
+        ln = ln.strip()
+        if not ln or ln.startswith("【Provider 凭证】"):
+            continue
+        if "❌" in ln:
+            bad(ln.replace("❌ FAIL", "").strip())
+        elif "⚠️" in ln:
+            print(f"  {ln}")
+        else:
+            print(f"  {ln}")
+    if r.returncode != 0:
+        bad("provider 检查未通过（详见上方）")
+
+
 def main():
     print("════════════════════════════════════════════")
     print(" 快速健康子集  " + __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -169,6 +193,7 @@ def main():
     check_external_apis()
     check_services()
     check_memory_index()
+    check_provider_health()
     check_cron_delivery()
     print("════════════════════════════════════════════")
     print(f" 结果: PASS={PASSED}  FAIL={len(FAILED)}")
