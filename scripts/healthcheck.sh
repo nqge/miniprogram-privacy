@@ -56,10 +56,28 @@ PY
 if [ "${fs_out:0:2}" = "OK" ]; then ok "飞书 API token 可获取"
 else bad "飞书 API token 获取失败 — ${fs_out}"; fi
 
-# A2 GitHub API（茶馆监控依赖）
-gh_code=$(curl -s -m 15 -o /dev/null -w "%{http_code}" https://api.github.com/repos/ythx-101/openclaw-qa/issues 2>/dev/null)
-if [ "$gh_code" = "200" ]; then ok "GitHub API 可达（茶馆监控依赖）"
-else bad "GitHub API 返回 ${gh_code} — 茶馆监控会失败"; fi
+# A2 GitHub API（茶馆监控依赖）—— 用认证请求，并区分「限流」与「不可达」
+# 2026-10-26 教训：匿名额度只有 60 次/小时/IP，耗尽后 403 看起来像权限问题，
+# 极难一眼看出。现在读 gh CLI 的 token 换成 5000 次/小时，并报实际额度。
+GH_TOKEN=$(grep -oP '(?<=oauth_token: ).*' /root/.config/gh/hosts.yml 2>/dev/null | head -1)
+gh_hdr=(-H "User-Agent: openclaw-healthcheck" -H "Accept: application/vnd.github+json")
+[ -n "$GH_TOKEN" ] && gh_hdr+=(-H "Authorization: Bearer $GH_TOKEN")
+gh_rl=$(curl -s -m 15 "${gh_hdr[@]}" https://api.github.com/rate_limit 2>/dev/null)
+gh_remain=$(echo "$gh_rl" | python3 -c "import json,sys
+try:
+    d=json.load(sys.stdin); c=(d.get('resources') or {}).get('core') or {}
+    print(f\"{c.get('remaining')}/{c.get('limit')}\")
+except Exception: print('')" 2>/dev/null)
+if [ -n "$gh_remain" ]; then
+  gh_r=${gh_remain%%/*}; gh_l=${gh_remain##*/}
+  if [ -n "$gh_l" ] && [ "$gh_l" -gt 0 ] 2>/dev/null && [ "$gh_r" -lt 5 ] 2>/dev/null; then
+    bad "GitHub API 额度将耗尽（${gh_remain}）— 茶馆监控可能拉不到新讨论"
+  else
+    ok "GitHub API 可用（额度 ${gh_remain}，茶馆监控依赖）"
+  fi
+else
+  bad "GitHub API 探测失败 — 茶馆监控可能拉不到新讨论"
+fi
 
 # A3 embeddings 代理
 px_out=$(curl -s -m 8 "$PROXY_HEALTH" 2>/dev/null)
