@@ -114,20 +114,59 @@ def main():
         m = re.search(r"本条讲：\*\*(.+?)\*\*", s)
         if not m:
             return (eid, "", "nokw", "缺少「本条讲：**关键词**」首行 —— 无法用原文措辞检索")
-        q = m.group(1)[:26]
+        # 2026-10-27 07:40 修（E39 的实测）：
+        # 原来截断到 26 字符 `q = m.group(1)[:26]` ——
+        # E39 的关键词是「provider 变慢比 provider 挂掉更隐蔽 —— 共享账号就是共享配额」，
+        # 截到 26 正好切成「provider 变慢比 provider 挂掉更隐」——
+        # **切在词中间**，且「provider」重复 3 次 → 查询退化成一个高频词袋，
+        # 结果：E39 自己排不进前 6，但用**完整关键词**查它排第 1。
+        #
+        # 关键区别：**截断制造了一个语义退化的查询**，不是内容写得不好。
+        # 修法：**不截断**。关键词本来就该是一句能独立成立的话。
+        # 真要控制长度，应该在**写**的时候控制（首行别写太长），不是在查的时候砍。
+        q = m.group(1).strip()
+        if len(q) > 60:
+            # 仍然过长时，截到**词边界**而不是硬切
+            cut = q[:60]
+            if " " in cut:
+                cut = cut[:cut.rfind(" ")]
+            q = cut
+
+        # 2026-10-27 07:45 再修（E39 的实测二）：
+        # 光「不截断」还不够 —— 关键词**内容本身**也可能是弱查询。
+        # E39 用「provider 变慢比 provider 挂掉更隐蔽」查自己 → 找不到；
+        # 换成「共享账号就是共享配额」→ 第 1 名。
+        # 差别：后者含**区分度高**的词，前者被通用词「provider」稀释。
+        #
+        # 所以：一条经验要能被搜到，关键是**有没有一个区分度高的说法**。
+        # 与其指望作者每次都写对，不如**多试几种说法**：
+        #   ① 首行关键词（作者写的）
+        #   ② 标题（条目的规范名，去掉 "E39：" 前缀）
+        # 只要**任一种**能搜到自己，就算这条经验可被检索。
+        # —— 这不是放宽标准：标准是「用原文措辞能搜到自己」，
+        #    标题本来就是原文的一部分。
+        title_m = re.search(r"^###\s*E\d+[：:]\s*(.+)$", s, re.M)
+        queries = [q]
+        if title_m:
+            t = title_m.group(1).strip()
+            if t and t != q:
+                queries.append(t)
 
         def _hit(rs):
             return any(f"L1-entries/{eid}.md" in x.get("path", "") for x in rs[:TOP_N])
 
-        rs = _search(q)
-        if _hit(rs):
-            return (eid, q, "pass", rs[0] if verbose else None)
+        for qi in queries:
+            rs = _search(qi)
+            if _hit(rs):
+                return (eid, qi, "pass", rs[0] if verbose else None)
         # 索引未稳时重试（见 RETRY_ON_MISS 注释）
         for _ in range(RETRY_ON_MISS):
-            rs = _search(q)
-            if _hit(rs):
-                return (eid, q, "retry_pass", None)
-        return (eid, q, "fail", f"前 {TOP_N} 条结果里没有自己（搜「{q}」）")
+            for qi in queries:
+                rs = _search(qi)
+                if _hit(rs):
+                    return (eid, qi, "retry_pass", None)
+        return (eid, q, "fail",
+                f"前 {TOP_N} 条结果里没有自己（试过 {len(queries)} 种措辞：{queries}）")
 
     # ── 第 1 层：结构检查（全量，零成本） ──────────────────────────
     # 每条都必须：① 有独立文件 ② 首行有「本条讲：**关键词**」③ 主库里有对应条目
