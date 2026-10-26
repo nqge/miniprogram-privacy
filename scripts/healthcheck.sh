@@ -739,6 +739,80 @@ while IFS= read -r line; do
 done <<< "$mem_report"
 PASS=$((PASS + 1))
 
+echo "【O】L1 计数一致性（防止手改文档后过期）"
+
+# 2026-10-27 补：MEMORY.md / L1 主库头部的「N 条」是**手写的**，
+# 加了 E30/E31 后就忘了同步 → MEMORY.md 还写着 29 条，实际已经 31 条。
+# 计数过期本身不致命，但**它是我判断「记忆系统是否正常」的参照** ——
+# 参照错了，判断就错了。所以加断言自动核对。
+
+count_report=$(python3 - << 'PY2' 2>/dev/null
+import glob, re, os
+WS = '/root/.openclaw/workspace'
+ENT = f'{WS}/memory/L1-entries'
+LIB = f'{WS}/memory/L1-experience-library.md'
+MEM = f'{WS}/MEMORY.md'
+
+files = sorted(glob.glob(f'{ENT}/E*.md'))
+n_files = len(files)
+if not n_files:
+    print("FAIL 找不到任何 L1 独立文件")
+    raise SystemExit(1)
+
+# 真实最大编号
+nums = []
+for f in files:
+    m = re.search(r'E(\d+)\.md$', os.path.basename(f))
+    if m:
+        nums.append(int(m.group(1)))
+real_max = max(nums)
+
+# 库里的条目数（按 ### E<N> 标题算）
+try:
+    lib = open(LIB, encoding='utf-8').read()
+    lib_ids = set(int(x) for x in re.findall(r'^### E(\d+)', lib, re.M))
+    lib_n = len(lib_ids)
+except Exception:
+    lib_n = 0
+
+problems = []
+if lib_n != n_files:
+    problems.append(f"主库 {lib_n} 条 vs 独立文件 {n_files} 个")
+
+# MEMORY.md 里的声明
+try:
+    mem = open(MEM, encoding='utf-8').read()
+    m1 = re.search(r'（(\d+) 条，E1–E(\d+)）', mem)
+    m2 = re.search(r'检索自检（必须 (\d+)/\d+）', mem)
+    if m1:
+        if int(m1.group(1)) != n_files or int(m1.group(2)) != real_max:
+            problems.append(f"MEMORY.md 声明 {m1.group(1)} 条/E1–E{m1.group(2)}，实际 {n_files} 条/E1–E{real_max}")
+    if m2:
+        if int(m2.group(1)) != n_files:
+            problems.append(f"MEMORY.md 自检声明 {m2.group(1)}/{m2.group(1)}，实际应为 {n_files}/{n_files}")
+    # L1 主库头部
+    h = re.search(r'当前条目数\*\*：(\d+) 条（E1–E(\d+)）', lib)
+    if h:
+        if int(h.group(1)) != n_files or int(h.group(2)) != real_max:
+            problems.append(f"L1 主库头部声明 {h.group(1)} 条/E1–E{h.group(2)}，实际 {n_files} 条/E1–E{real_max}")
+except Exception as e:
+    problems.append(f"读 MEMORY.md 失败: {type(e).__name__}")
+
+if problems:
+    for p in problems:
+        print(f"FAIL {p}")
+else:
+    print(f"PASS L1 计数一致（{n_files} 条，E1–E{real_max}）")
+PY2
+)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$count_report"
+PASS=$((PASS + 1))
+
 echo "【L】连续性入口新鲜度"
 
 cont_report=$(python3 - << 'PY' 2>/dev/null
