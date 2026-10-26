@@ -193,6 +193,40 @@ def check_cron_delivery():
         ok(f"{checked} 个定时任务状态正常")
 
 
+def check_provider_resilience():
+    """fallback 链是否真的跨 provider —— 单 provider 时 fallback 韧性为 0。
+
+    2026-10-26 实测：minimax 达到 Token Plan 用量上限时，
+    配的 fallback（M2.7-highspeed / M2.7）全在同一个 provider 同一账号下，
+    三个模型一起挂 → 「有 fallback」不等于「有兜底」。
+
+    状态字段看不出这个问题：模型都在、fallbackConfigured=True，
+    只有真的欠费/限流/宕机时才暴露 —— 而那时系统已经不能推理了。
+    """
+    print("【Provider 韧性】")
+    try:
+        c = json.load(open("/root/.openclaw/openclaw.json", encoding="utf-8"))
+    except Exception as e:
+        bad(f"读不到 openclaw.json（{type(e).__name__}）")
+        return
+    providers = list(c.get("models", {}).get("providers", {}).keys())
+    fallbacks = c.get("agents", {}).get("defaults", {}).get("model", {}).get("fallbacks", []) or []
+    if not fallbacks:
+        warn("未配置任何 fallback —— 主模型不可用时没有任何兜底")
+        return
+    if len(providers) <= 1:
+        bad(f"只有 1 个 provider，但配了 {len(fallbacks)} 项 fallback —— "
+            f"全在同一 provider 同一账号下，provider 级故障（欠费/限流/宕机）时兜底无效")
+    else:
+        fb_p = {f.split("/")[0] for f in fallbacks if "/" in f}
+        if fb_p - set(providers):
+            warn(f"fallback 指向未配置的 provider: {', '.join(sorted(fb_p - set(providers)))}")
+        elif len(fb_p) == 1:
+            warn(f"有 {len(providers)} 个 provider，但 fallback 全在 {list(fb_p)[0]} —— 未跨 provider 兜底")
+        else:
+            print(f"  ✅ PASS  fallback 跨 provider 兜底（{', '.join(sorted(fb_p))}）")
+
+
 def check_provider_health():
     """provider 凭证是否还活着 —— 主动探测，不等调用时才发现失效。
 
@@ -366,6 +400,7 @@ def main():
     check_services()
     check_memory_index()
     check_provider_health()
+    check_provider_resilience()
     check_cron_delivery()
     _check_unit_integrity()
     _check_unit_drift()

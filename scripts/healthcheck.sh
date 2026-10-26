@@ -571,6 +571,57 @@ while IFS= read -r line; do
 done <<< "$cont_report"
 PASS=$((PASS + 1))
 
+echo "【M】Provider 韧性与 fallback 有效性"
+
+# 2026-10-26 实测：19:11 和 19:42 两次巡检 FAIL，根因是 MiniMax
+# 「已达到 Token Plan 用量上限」(HTTP 429)。查 failover 日志时发现
+# 配的 fallback 是 minimax/MiniMax-M2.7-highspeed + minimax/MiniMax-M2.7 ——
+# **同一个 provider、同一个账号**。配额一满，三个模型一起挂。
+# 也就是说 fallback 链在「provider 级故障」面前提供的韧性是 0。
+#
+# 状态字段看不出这个问题：配置齐全、模型存在、fallbackConfigured=True，
+# 但只要 provider 本身欠费/限流，兜底就是假的。
+# 这属于 E20「验证的对象错了」—— 该验的是「跨 provider 吗」，不是「配了吗」。
+
+prov_report=$(python3 - << 'PY2' 2>/dev/null
+import json
+try:
+    c = json.load(open('/root/.openclaw/openclaw.json', encoding='utf-8'))
+except Exception as e:
+    print(f"FAIL 读不到 openclaw.json（{type(e).__name__}）")
+    raise SystemExit(1)
+
+providers = list(c.get('models', {}).get('providers', {}).keys())
+fallbacks = c.get('agents', {}).get('defaults', {}).get('model', {}).get('fallbacks', []) or []
+
+print(f"PASS 已配置 provider: {len(providers)} 个 → {', '.join(providers) if providers else '无'}")
+print(f"PASS fallback 链: {len(fallbacks)} 项 → {', '.join(fallbacks) if fallbacks else '未配置'}")
+
+if not fallbacks:
+    print("WARN 未配置任何 fallback —— 主模型不可用时没有任何兜底")
+elif len(providers) <= 1:
+    print(f"FAIL 只有 1 个 provider，但配了 {len(fallbacks)} 项 fallback —— "
+          f"它们全在同一个 provider 同一账号下，provider 级故障（欠费/限流/宕机）时兜底无效")
+else:
+    fb_providers = {f.split('/')[0] for f in fallbacks if '/' in f}
+    if fb_providers - set(providers):
+        print(f"WARN fallback 指向未配置的 provider: {', '.join(sorted(fb_providers - set(providers)))}")
+    elif len(fb_providers) == 1 and len(providers) > 1:
+        print(f"WARN 有 {len(providers)} 个 provider，但 fallback 全在 {list(fb_providers)[0]} —— "
+              f"未跨 provider 兜底")
+    else:
+        print(f"PASS fallback 跨 provider 兜底（{', '.join(sorted(fb_providers))}）")
+PY2
+)
+while IFS= read -r ln; do
+  case "$ln" in
+    PASS*) ok "${ln#PASS }" ;;
+    FAIL*) bad "${ln#FAIL }" ;;
+    WARN*) warn "${ln#WARN }" ;;
+    *) [ -n "$ln" ] && echo "  $ln" ;;
+  esac
+done <<< "$prov_report"
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
