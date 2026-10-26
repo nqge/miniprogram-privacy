@@ -326,3 +326,11 @@
 **5. 清理 3 个孤儿 cron**（enabled=false 僵尸，04-02 迁移残留，CLI 不显示）
 **6. 新增 cron `healthcheck`（每日 07:00）** 实跑 status=ok 25s，巡检 PASS=20 FAIL=0
 **残留项**: 第 1 项吊销 PAT（建议尽快）+ 第 5 项博客（不急）
+
+### 2026-10-26 11:05 心跳 — PAT 风险实测上调 + 巡检新增凭证断言
+**实测**: classic PAT 仍有效且带 `admin:org/delete_repo/admin:enterprise`（近乎全量管理员）；
+         另发现第二处明文点 `~/.config/gh/hosts.yml` + 7 个会话日志 65 处；均未入 git
+**风险等级上调**: 从「明文落盘」→ 「账号完全控制权」，且存了半年
+**已做**: healthcheck.sh 新增【E】凭证暴露面断言（FAIL/WARN 分级）；修了重复计数 bug；
+         单测两态正确。当前 PASS=21 FAIL=2 WARN=1（如实报出真实问题）
+**残留项**: 第 1 项需牛哥哥本人吊销+重签（我无法代为签发）；第 5 项博客不急

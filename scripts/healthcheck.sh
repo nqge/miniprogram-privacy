@@ -118,6 +118,59 @@ done <<< "$cron_out"
 
 PASS=$((PASS + 6 - cron_fail))
 
+# ── E. 凭证暴露面 ─────────────────────────────────
+echo ""
+echo "【E】凭证暴露面"
+
+cred_report=$(python3 - << 'PY' 2>/dev/null
+import os, re, glob
+PAT = re.compile(r'gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{50,}')
+# 已知明文存放点
+KNOWN = [
+    '/root/.openclaw/workspace/GIT_CREDENTIALS.md',
+    '/root/.config/gh/hosts.yml',
+]
+found = 0
+for p in KNOWN:
+    if not os.path.exists(p):
+        continue
+    try:
+        s = open(p, encoding='utf-8', errors='replace').read()
+    except Exception:
+        continue
+    n = len(set(PAT.findall(s)))
+    if n:
+        found += 1
+        print(f"FAIL 明文凭证 {p}（{n} 个 token）")
+# 会话日志（workspace 外，未被 git 跟踪 → 风险较低但仍需清理）
+hits = 0
+for f in glob.glob('/root/.openclaw/agents/main/sessions/*.jsonl*'):
+    try:
+        with open(f, encoding='utf-8', errors='replace') as fh:
+            if PAT.search(fh.read()):
+                hits += 1
+    except Exception:
+        pass
+if hits:
+    print(f"WARN 会话日志含凭证 {hits} 个文件（未入 git，风险较低）")
+print(f"__CRED_FAILED__={found}")
+PY
+)
+cred_fail=$(echo "$cred_report" | grep -oP '__CRED_FAILED__=\K[0-9]+')
+cred_fail=${cred_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$cred_report"
+
+if [ "$cred_fail" -eq 0 ]; then
+  ok "无明文凭证在已知存放点"
+fi
+# 注意：bad() 已经把 FAIL 计数加过了，这里不能再加一次
+PASS=$((PASS + 1))
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
