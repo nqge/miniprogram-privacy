@@ -83,6 +83,11 @@ tmr=$(systemctl --user is-active openclaw-log-cleanup.timer 2>/dev/null)
 if [ "$tmr" = "active" ]; then ok "openclaw-log-cleanup.timer = active"
 else bad "openclaw-log-cleanup.timer = ${tmr:-missing} — 日志轮转不会自动清理"; fi
 
+# 快速健康子集的定时器（30 分钟一次 + 独立告警链路）
+qtmr=$(systemctl --user is-active openclaw-quick-health.timer 2>/dev/null)
+if [ "$qtmr" = "active" ]; then ok "openclaw-quick-health.timer = active（30 分钟巡检）"
+else bad "openclaw-quick-health.timer = ${qtmr:-missing} — 服务故障最长 4 小时才被发现"; fi
+
 # ── C. 记忆索引 ───────────────────────────────────
 echo ""
 echo "【C】记忆索引"
