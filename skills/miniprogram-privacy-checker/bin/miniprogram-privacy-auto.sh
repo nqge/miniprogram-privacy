@@ -80,10 +80,14 @@ check_python() {
 check_dependencies() {
     print_info "检查 Python 依赖..."
 
-    # 检查 requirements.txt
-    if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
-        print_info "安装依赖包..."
-        pip3 install -q -r "$SCRIPT_DIR/requirements.txt" 2>/dev/null || {
+    # 检查 requirements.txt（脚本可能在 bin/ 或仓库根目录，两个位置都找）
+    REQ_FILE=""
+    for candidate in "$SCRIPT_DIR/requirements.txt" "$SCRIPT_DIR/../requirements.txt"; do
+        if [ -f "$candidate" ]; then REQ_FILE="$candidate"; break; fi
+    done
+    if [ -n "$REQ_FILE" ]; then
+        print_info "安装依赖包（$(basename "$(dirname "$REQ_FILE")")/requirements.txt）..."
+        pip3 install -q -r "$REQ_FILE" 2>/dev/null || {
             print_warning "部分依赖安装失败，可能影响部分功能"
         }
         print_success "依赖检查完成"

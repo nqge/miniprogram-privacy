@@ -118,7 +118,7 @@ class Unpacker:
                 shutil.rmtree(clone_dir)
 
             subprocess.run(
-                ['git', 'clone', 'https://github.com/xuedipapa/wxappUnpacker.git', str(clone_dir)],
+                ['git', 'clone', 'https://github.com/system-cpu/wxappUnpacker.git', str(clone_dir)],
                 check=True
             )
 
@@ -141,9 +141,7 @@ class Unpacker:
 
         print("[-] 无法自动安装 wxappUnpacker")
         print("[!] 请手动安装:")
-        print("    npm install -g wxappUnpacker")
-        print("    # 或")
-        print("    git clone https://github.com/xuedipapa/wxappUnpacker.git")
+        print("    git clone https://github.com/system-cpu/wxappUnpacker.git")
         print("    cd wxappUnpacker")
         print("    npm install")
 
@@ -213,8 +211,12 @@ def main():
 
     parser = argparse.ArgumentParser(description='小程序反编译工具')
     parser.add_argument('input_path', help='.wxapkg 文件或项目目录路径')
+    parser.add_argument('output_dir', nargs='?', default=None, help='输出目录（仅用于 .wxapkg 文件，也可用 -o 指定）')
     parser.add_argument('-o', '--output', help='输出目录（仅用于 .wxapkg 文件）')
     args = parser.parse_args()
+
+    # 合并两种输出参数写法：位置参数或 -o/--output
+    output_arg = args.output or args.output_dir
 
     input_path = Path(args.input_path)
 
@@ -229,12 +231,12 @@ def main():
             print(f"[+] 反编译成功: {output_dir}")
 
             # 如果指定了输出目录，复制文件
-            if args.output:
-                output_path = Path(args.output)
+            if output_arg:
+                output_path = Path(output_arg)
                 if output_path.exists():
                     shutil.rmtree(output_path)
                 shutil.copytree(output_dir, output_path)
-                print(f"[+] 已复制到: {args.output}")
+                print(f"[+] 已复制到: {output_arg}")
 
         else:
             print("[-] 反编译失败")
