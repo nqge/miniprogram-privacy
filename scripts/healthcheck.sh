@@ -421,6 +421,49 @@ while IFS= read -r line; do
 done <<< "$l1_report"
 PASS=$((PASS + 1))
 
+# ── K. 工作区根目录整洁度 ─────────────────────────
+echo ""
+echo "【K】工作区根目录整洁度"
+
+root_report=$(python3 - << 'PY' 2>/dev/null
+import os
+WS = '/root/.openclaw/workspace'
+# 根目录应该只有这些文件（子目录不算）
+EXPECTED = {
+    'AGENTS.md','SOUL.md','USER.md','IDENTITY.md','MEMORY.md','TOOLS.md',
+    'HEARTBEAT.md','SESSION-STATE.md','proactive-tracker.md','待决策选项单.md',
+    'LEARNING_PLAN.md','LEARNING_SETUP_COMPLETE.md','CRON_SETUP_COMPLETE.md',
+    'learning_summary.py','GIT_CREDENTIALS.md',
+}
+failed = 0
+stray = []
+for name in os.listdir(WS):
+    p = os.path.join(WS, name)
+    if not os.path.isfile(p):
+        continue
+    if name in EXPECTED or name.startswith('.'):
+        continue
+    stray.append(name)
+if stray:
+    for s in stray:
+        size = os.path.getsize(os.path.join(WS, s))
+        print(f"FAIL 根目录有多余文件「{s}」（{size} 字节）—— 可能是误创建的临时产物")
+        failed += 1
+else:
+    print("PASS 根目录文件干净")
+print(f"__ROOT_FAILED__={failed}")
+PY
+)
+root_fail=$(echo "$root_report" | grep -oP '__ROOT_FAILED__=\K[0-9]+')
+root_fail=${root_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$root_report"
+PASS=$((PASS + 1))
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
