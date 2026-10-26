@@ -125,7 +125,26 @@ def main():
         f"新增 {len(fresh)} 条讨论（展示前 {min(15,len(fresh))} 条）\n\n---\n\n"
         + "\n---\n\n".join(blocks)
     )
-    digest_path.write_text(digest, encoding="utf-8")
+
+    # 去重：与最近一份摘要内容几乎相同就不重复落盘
+    # （实测 4 小时一次的两次运行会产出 99.8% 相同的 80KB 文件，纯浪费磁盘和磁盘 IO）
+    prev = sorted(OUT_DIR.glob("teahouse_summary_*.md"), key=lambda p: p.stat().st_mtime)
+    if prev:
+        latest = prev[-1]
+        try:
+            prev_text = latest.read_text(encoding="utf-8")
+            # 只比较讨论主体（去掉时间戳标题行），避免因 stamp 不同而误判为不同
+            def body_of(t):
+                return "\n".join(l for l in t.splitlines() if not l.startswith("# 龙虾茶馆监控摘要"))
+            if body_of(prev_text) == body_of(digest):
+                print(f"[teahouse] 内容与最近摘要相同，跳过落盘（保留 {latest.name}）")
+                digest_path = latest
+            else:
+                digest_path.write_text(digest, encoding="utf-8")
+        except OSError:
+            digest_path.write_text(digest, encoding="utf-8")
+    else:
+        digest_path.write_text(digest, encoding="utf-8")
 
     # 更新 state：把新条目加进去
     for i in fresh:
