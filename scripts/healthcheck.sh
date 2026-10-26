@@ -381,6 +381,46 @@ while IFS= read -r line; do
 done <<< "$distill_report"
 PASS=$((PASS + 1))
 
+# ── J. L1 经验库活跃度 ───────────────────────────
+echo ""
+echo "【J】L1 经验库活跃度"
+
+l1_report=$(python3 - << 'PY' 2>/dev/null
+import os, re, glob, datetime
+WS = '/root/.openclaw/workspace'
+L1 = f'{WS}/memory/L1-experience-library.md'
+failed = 0
+if not os.path.exists(L1):
+    print("FAIL L1 经验库不存在（memory/L1-experience-library.md）")
+    failed = 1
+else:
+    s = open(L1, encoding='utf-8', errors='replace').read()
+    entries = re.findall(r'^### (E\d+)[：:]', s, re.M)
+    if not entries:
+        print("FAIL L1 经验库没有任何条目")
+        failed = 1
+    else:
+        # 是否有近期（7 天内）新增的经验 —— 长期不更新说明提炼环节停了
+        mtime = datetime.date.fromtimestamp(os.path.getmtime(L1))
+        age = (datetime.date.today() - mtime).days
+        if age > 30:
+            print(f"FAIL L1 经验库已 {age} 天未更新（提炼环节可能已停）")
+            failed = 1
+        else:
+            print(f"PASS L1 经验库 {len(entries)} 条，最后更新 {age} 天前")
+print(f"__L1_FAILED__={failed}")
+PY
+)
+l1_fail=$(echo "$l1_report" | grep -oP '__L1_FAILED__=\K[0-9]+')
+l1_fail=${l1_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$l1_report"
+PASS=$((PASS + 1))
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
