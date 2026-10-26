@@ -171,6 +171,51 @@ fi
 # 注意：bad() 已经把 FAIL 计数加过了，这里不能再加一次
 PASS=$((PASS + 1))
 
+# ── F. 记忆笔记结构 ───────────────────────────────
+echo ""
+echo "【F】记忆笔记结构"
+
+note_report=$(python3 - << 'PY' 2>/dev/null
+import glob, os, re, datetime
+MEM = '/root/.openclaw/workspace/memory'
+# 今天的日期文件（学习/反思都写在这里）
+today = datetime.date.today().isoformat()
+cands = [f'{MEM}/{today}.md', '/root/.openclaw/workspace/SESSION-STATE.md']
+failed = 0
+for p in cands:
+    if not os.path.exists(p):
+        continue
+    s = open(p, encoding='utf-8', errors='replace').read()
+    learn = re.findall(r'^## 📚 每日学习.*$', s, re.M)
+    refl  = re.findall(r'^## 🪞 每日反思.*$', s, re.M)
+    name = os.path.basename(p)
+    if len(learn) > 1:
+        print(f"FAIL {name} 有 {len(learn)} 个「每日学习」小节（应只有 1 个）")
+        failed += 1
+    if len(refl) > 1:
+        print(f"FAIL {name} 有 {len(refl)} 个「每日反思」小节（应只有 1 个）")
+        failed += 1
+    # 单节长度：学习/反思正文应 < 1200 字（超出说明没按 100-200 字约束）
+    for m in re.finditer(r'^## (📚 每日学习|🪞 每日反思).*?\n(.*?)(?=\n## |\Z)', s, re.M | re.S):
+        body = re.sub(r'[\s#*>`\-]', '', m.group(2))
+        if len(body) > 1200:
+            print(f"FAIL {name} 小节超长 {len(body)} 字（约束 100-200 字）")
+            failed += 1
+if failed == 0:
+    print("PASS 记忆笔记结构正常")
+print(f"__NOTE_FAILED__={failed}")
+PY
+)
+note_fail=$(echo "$note_report" | grep -oP '__NOTE_FAILED__=\K[0-9]+')
+note_fail=${note_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$note_report"
+PASS=$((PASS + 1))
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
