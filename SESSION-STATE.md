@@ -354,3 +354,16 @@
 3. healthcheck 新增【F】记忆笔记结构断言（多小节/超长 → FAIL），单测三场景均正确
 **教训**: 「追加而非覆盖」在频繁触发场景下是反向的；软约束在 LLM 任务里等于没有约束
 **残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
+
+### 2026-10-26 11:25 心跳 — 巡检抓到 daily-learning 超时并修复
+**巡检首次真正抓到故障**: daily-learning lastRunStatus=error
+**根因**: `cron: job execution timed out`（180s）。历史记录显示成功耗时 11-141s，
+   新版任务（读3天+压缩+替换+写回）连续 5 次撞穿 180s
+   → **我把任务加重的，却没同步放宽超时**
+**修法**:
+- daily-learning / daily-reflection timeout 180 → 420s
+- healthcheck 原本**未设 timeout（默认 30s）** → 设 300s（6 组断言随时可能超）
+- CLI 参数是 `--timeout-seconds`（`--timeout` 是 ms 且只管非 agent job）
+**验证**: status=ok 58s delivered=True；结构仍 1 学习 + 1 反思（233/456 字）
+**教训**: 改任务负载必须同步改超时；未设 timeout 不是"无限"而是"默认 30s"
+**残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
