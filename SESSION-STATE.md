@@ -824,3 +824,18 @@
    结构性弱点不会自己坏，只在最坏时刻显形，那时已无补救窗口
 **巡检现状**: 13 组断言（A-M），PASS=43 FAIL=3 WARN=1
 **残留项**: 1 PAT 吊销（需牛哥哥本人）· 1 第二 provider key（需牛哥哥提供）· 5 博客方向
+
+### 2026-10-26 21:30 心跳 — 验证【M】在真无人值守下会告警
+**21:20 真实定时触发链路全通**:
+  timer → 服务 PASS=9 FAIL=1 → exit 1 → Triggering OnFailure →
+  alert 单元启动 → [alert-dedup] 发送 code=0 msg=success ✅
+  告警状态已记 fingerprint + lastSentAt → 后续 6 小时同故障只计数不重复推
+**两个差点误判的地方（都靠更准的取证纠正）**:
+1. `journalctl -u <实例化 unit 名>` 返回 No entries → 误以为没告警。
+   实际用全量 grep 找到了 code=0 success。**按 unit 名过滤会漏日志**
+2. timer LAST 显示 20:13 之后「没按时跑」→ 实际是**我自己手动 systemctl start**
+   触发的，而 OnUnitActiveSec 从服务上次启动起算 → 每次手动触发推后 30 分钟。
+   19:11/19:42/20:13 真实间隔正好 30 分钟，timer 本身没问题
+**教训**: 取证要选对工具（查不到 ≠ 不存在）；手动触发会改变被测对象的行为
+**巡检现状**: 13 组断言（A-M），PASS=43 FAIL=3 WARN=1
+**残留项**: 1 PAT 吊销（需牛哥哥本人）· 1 第二 provider key（需牛哥哥提供）· 5 博客方向
