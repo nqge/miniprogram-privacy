@@ -29,8 +29,23 @@ SUPPRESS_SECONDS = 6 * 3600  # 同一故障 6 小时内只告警一次
 ALERT = "/root/.openclaw/workspace/scripts/quick_health_alert.py"
 
 
+RESULT_FILE = Path("/root/.openclaw/workspace/logs/quick-health-result.json")
+
+
 def current_failures():
-    """从 quick-health 的输出里提取失败项。"""
+    """读取 quick-health 写下的结果文件。
+
+    为什么不再自己跑一遍：原来 dedup 会重跑 quick_health.py，
+    导致每次成功巡检实际跑两遍（8 秒 → 16 秒），
+    而且两次结果可能不一致（竞态会让状态错乱）。
+
+    退化路径：结果文件不存在（比如从没跑过）→ 自己跑一次。
+    """
+    try:
+        data = json.loads(RESULT_FILE.read_text(encoding="utf-8"))
+        return list(data.get("failures") or []), 1 if data.get("failed") else 0
+    except Exception:
+        pass
     r = subprocess.run(
         ["/usr/bin/python3", "/root/.openclaw/workspace/scripts/quick_health.py"],
         capture_output=True, text=True, timeout=180,

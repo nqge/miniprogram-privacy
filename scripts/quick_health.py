@@ -254,6 +254,35 @@ def _check_unit_drift():
         bad("systemd 单元存在配置漂移（详见上方）")
 
 
+RESULT_FILE = f"{WS}/logs/quick-health-result.json"
+
+
+def _write_result_file():
+    """把本次结果写到文件 —— alert_dedup.py 读它，而不是重跑一遍巡检。
+
+    为什么：原来 dedup 会自己再跑一次 quick_health.py，
+    导致每次成功巡检实际跑两遍（8 秒 → 16 秒），而且两次结果可能不一致
+    （第一次失败、第二次成功这种竞态会让状态错乱）。
+    """
+    import datetime
+    try:
+        os.makedirs(f"{WS}/logs", exist_ok=True)
+        with open(RESULT_FILE, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "passed": PASSED,
+                    "failed": len(FAILED),
+                    "failures": FAILED,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+    except Exception as e:
+        print(f"[log] 结果文件写入失败（忽略）: {type(e).__name__}")
+
+
 def _persist_log():
     """把结果追加到 logs/quick-health.log —— journald 会轮转，日志文件能保留历史。
 
@@ -294,6 +323,7 @@ def main():
         print(" 提示：完整巡检请跑 scripts/healthcheck.sh")
     print("════════════════════════════════════════════")
     _persist_log()
+    _write_result_file()
     return 1 if FAILED else 0
 
 
