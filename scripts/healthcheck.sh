@@ -492,7 +492,22 @@ else:
                 notes_txt += open(f, encoding='utf-8', errors='replace').read()
             except Exception:
                 pass
-        healed_items = [p for p in pending if f"#{p.get('number')}" in notes_txt]
+        # 匹配方式：**编号或标题**都能触发（2026-10-27 补）
+        # 原来只认 '#135' 这种带 # 的写法 —— 如果 agent 蒸馏时只写标题
+        # 「小隐的三层记忆架构」而没写编号，条目就会永远卡在 pending。
+        # 标题取前 15 字（足够唯一，又不会因为标题被改写而漏配）。
+        def _is_distilled(item):
+            num = f"#{item.get('number')}"
+            if num in notes_txt:
+                return True
+            title = (item.get('title') or '').strip()
+            if len(title) >= 10:
+                head = title[:15]
+                if head in notes_txt:
+                    return True
+            return False
+
+        healed_items = [p for p in pending if _is_distilled(p)]
         if healed_items:
             try:
                 data = json.load(open(todo, encoding='utf-8'))
