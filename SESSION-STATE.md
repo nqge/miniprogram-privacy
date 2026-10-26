@@ -394,3 +394,12 @@
         （今天第二次栽在「读说明当证据」）
 **已核查**: src-recon / ai-daily-newsletter 均 0 落后，干净
 **残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
+
+### 2026-10-26 11:25 心跳 — 巡检新增【G】独立技能仓库同步断言
+**背景**: backup_audit 只统计嵌套仓库数量，从不检查是否与远端同步 → 停滞 5 个月无人察觉
+**已做**: healthcheck【G】组检查落后/领先/未提交，任一非零即 FAIL
+**灵敏度验证**: src-recon reset --hard HEAD~1 → 立刻报「领先 1」→ 已恢复 origin/main（af0b05a）
+**当前**: 3 个技能仓库全部同步；巡检 PASS=27 FAIL=2 WARN=1
+**顺带确认**: src-recon / ai-daily-newsletter 在主仓库 .gitignore 内（各自管 remote），
+   miniprogram-privacy-checker 被主仓库镜像为普通文件 —— 策略正确，不是 bug
+**残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
