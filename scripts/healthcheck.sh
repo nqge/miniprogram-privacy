@@ -508,6 +508,12 @@ PASS=$((PASS + 1))
 echo ""
 echo "════════════════════════════════════════════"
 echo " 结果: PASS=$PASS  FAIL=$FAIL  WARN=$WARN"
+
+# 维护 SESSION-STATE.md 里的「巡检现状」行 —— 避免硬编码数字变陈旧
+# （2026-10-26 教训：SESSION-STATE 头部曾过期 5 天）
+# 独立成脚本：bash 里嵌套 heredoc + 命令替换会导致变量展开异常（实测 $GROUPS 恒为空）
+python3 /root/.openclaw/workspace/scripts/update_state_status.py "$PASS" "$FAIL" "$WARN" >/dev/null 2>&1
+
 if [ "$FAIL" -gt 0 ]; then
   echo ""
   echo " ⚠️ 有 $FAIL 项失败，需要处理。"
