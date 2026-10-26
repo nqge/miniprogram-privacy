@@ -464,6 +464,46 @@ while IFS= read -r line; do
 done <<< "$root_report"
 PASS=$((PASS + 1))
 
+# ── L. 连续性入口新鲜度 ───────────────────────────
+echo ""
+echo "【L】连续性入口新鲜度"
+
+cont_report=$(python3 - << 'PY' 2>/dev/null
+import os, re, datetime
+WS = '/root/.openclaw/workspace'
+failed = 0
+# SESSION-STATE.md 是下次会话的第一入口 —— 头部状态描述若过期会误导后续判断
+p = f'{WS}/SESSION-STATE.md'
+if not os.path.exists(p):
+    print("FAIL SESSION-STATE.md 不存在")
+    failed = 1
+else:
+    s = open(p, encoding='utf-8', errors='replace').read()
+    m = re.search(r'\*\*最后更新\*\*:\s*(\d{4}-\d{2}-\d{2})', s)
+    if not m:
+        print("FAIL SESSION-STATE.md 缺少「最后更新」标记")
+        failed = 1
+    else:
+        d = datetime.date.fromisoformat(m.group(1))
+        age = (datetime.date.today() - d).days
+        if age > 2:
+            print(f"FAIL SESSION-STATE.md 已 {age} 天未更新（头部状态描述可能已过期）")
+            failed = 1
+        else:
+            print(f"PASS SESSION-STATE.md 头部新鲜（{age} 天前更新）")
+print(f"__CONT_FAILED__={failed}")
+PY
+)
+cont_fail=$(echo "$cont_report" | grep -oP '__CONT_FAILED__=\K[0-9]+')
+cont_fail=${cont_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$cont_report"
+PASS=$((PASS + 1))
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
