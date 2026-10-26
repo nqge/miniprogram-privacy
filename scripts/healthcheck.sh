@@ -31,9 +31,42 @@ PROXY_HEALTH="http://127.0.0.1:8799/health"
 
 PASS=0; FAIL=0; WARN=0
 declare -a FAILED_ITEMS=()
+declare -a WAITING_ITEMS=()
+
+# 「等用户」的长期项 —— 2026-10-26 加
+#
+# 为什么：这些项每天都成立，要等牛哥哥本人操作才能解决
+# （吊销 PAT / 给第二个 provider 的 key）。
+# 混在「可处理故障」里有两个害处：
+#   1) 报告里真故障被长期项稀释 → 注意力被带走
+#   2) 每天的 FAIL 计数永远 ≥1 → 「今天有没有故障」这个信号失效
+# 分类后仍然全部报出来（信息不丢），但单独成组，一眼能看出哪些要动、哪些在等。
+WAITING_PATTERNS=(
+  "明文凭证 "
+  "只有 1 个 provider"
+  "未配置任何 fallback"
+  "fallback 全在"
+)
+
+is_waiting() {
+  local msg="$1"
+  for pat in "${WAITING_PATTERNS[@]}"; do
+    [[ "$msg" == *"$pat"* ]] && return 0
+  done
+  return 1
+}
 
 ok()   { PASS=$((PASS+1)); printf "  \033[32m✅ PASS\033[0m  %s\n" "$1"; }
-bad()  { FAIL=$((FAIL+1)); FAILED_ITEMS+=("$1"); printf "  \033[31m❌ FAIL\033[0m  %s\n" "$1"; }
+bad()  {
+  FAIL=$((FAIL+1))
+  FAILED_ITEMS+=("$1")
+  if is_waiting "$1"; then
+    WAITING_ITEMS+=("$1")
+    printf "  \033[33m⏳ 等你\033[0m  %s\n" "$1"
+  else
+    printf "  \033[31m❌ FAIL\033[0m  %s\n" "$1"
+  fi
+}
 warn() { WARN=$((WARN+1)); printf "  \033[33m⚠️  WARN\033[0m  %s\n" "$1"; }
 
 echo "════════════════════════════════════════════"
@@ -634,8 +667,22 @@ python3 /root/.openclaw/workspace/scripts/update_state_status.py "$PASS" "$FAIL"
 
 if [ "$FAIL" -gt 0 ]; then
   echo ""
-  echo " ⚠️ 有 $FAIL 项失败，需要处理。"
-  for it in "${FAILED_ITEMS[@]}"; do echo "   - $it"; done
+  actionable_n=0
+  for it in "${FAILED_ITEMS[@]}"; do is_waiting "$it" || actionable_n=$((actionable_n+1)); done
+  waiting_n=${#WAITING_ITEMS[@]}
+  if [ "$actionable_n" -gt 0 ]; then
+    echo " ⚠️ 有 $actionable_n 项可处理的失败，需要处理。"
+  else
+    echo " ✅ 没有可处理的失败（$waiting_n 项长期项在等你处理）。"
+  fi
+  echo "   【可处理 — 现在就该修】"
+  for it in "${FAILED_ITEMS[@]}"; do
+    is_waiting "$it" || echo "   - $it"
+  done
+  if [ ${#WAITING_ITEMS[@]} -gt 0 ]; then
+    echo "   【等牛哥哥 — 长期项，不该自己动】"
+    for it in "${WAITING_ITEMS[@]}"; do echo "   - $it"; done
+  fi
   echo ""
   echo " 提示：静默失败优先排查「触发→执行→落盘→投递」每一段，别只看状态字段。"
 fi

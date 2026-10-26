@@ -29,6 +29,29 @@ WS = "/root/.openclaw/workspace"
 FAILED = []
 PASSED = 0
 
+# 「等用户」的长期项 —— 这些不是现在能修的故障，不该每 30 分钟触发告警。
+#
+# 为什么需要分类（2026-10-26 实测）：
+# 加了【M】Provider 韧性断言后，它每天都会 FAIL（单 provider 是客观事实，
+# 要等牛哥哥给第二个 key 才能解决）→ 巡检从此永久 exit 1 →
+# OnFailure 每次触发 → 每次都被 dedup 抑制 → 白白消耗，
+# 更糟的是**真故障出现时它和长期项混在一起**，报告里两个 FAIL 并列，
+# 长期项会稀释真故障的注意力。
+#
+# 分类后：长期项 → 仍然报出来（信息不能丢），但**不触发告警**；
+# 只有「现在就该处理」的故障才告警。
+WAITING_ON_USER = [
+    "只有 1 个 provider",           # 【M】需要第二个 provider 的 key
+    "明文凭证 ",                    # 【E】需牛哥哥本人吊销 PAT 重签
+    "未配置任何 fallback",          # 【M】同上
+    "fallback 全在",                # 【M】同上
+]
+
+
+def is_waiting_on_user(msg: str) -> bool:
+    """这条失败是不是「等用户处理」的长期项。"""
+    return any(k in msg for k in WAITING_ON_USER)
+
 # 本次运行的唯一标识 + 开始时刻（2026-10-26 加，理由见 _write_result_file 的注释）
 import datetime as _dt
 import uuid as _uuid
@@ -48,7 +71,10 @@ def ok(msg):
 
 def bad(msg):
     FAILED.append(msg)
-    print(f"  ❌ FAIL  {msg}")
+    if is_waiting_on_user(msg):
+        print(f"  ⚠️ 等待项  {msg}")
+    else:
+        print(f"  ❌ FAIL  {msg}")
 
 
 def cmd(args, timeout=30):
@@ -360,6 +386,9 @@ def _write_result_file(run_id=None):
                     "passed": PASSED,
                     "failed": len(FAILED),
                     "failures": FAILED,
+                    # 长期项与真故障分开 —— 告警只对后者触发
+                    "actionable": [f for f in FAILED if not is_waiting_on_user(f)],
+                    "waiting": [f for f in FAILED if is_waiting_on_user(f)],
                 },
                 f,
                 ensure_ascii=False,
@@ -405,7 +434,10 @@ def main():
     _check_unit_integrity()
     _check_unit_drift()
     print("════════════════════════════════════════════")
-    print(f" 结果: PASS={PASSED}  FAIL={len(FAILED)}")
+    actionable = [f for f in FAILED if not is_waiting_on_user(f)]
+    waiting = [f for f in FAILED if is_waiting_on_user(f)]
+    print(f" 结果: PASS={PASSED}  FAIL={len(FAILED)}"
+          + (f"  (可处理 {len(actionable)} / 等用户 {len(waiting)})" if waiting else ""))
     if FAILED:
         for f in FAILED:
             print(f"   - {f}")
@@ -418,7 +450,9 @@ def main():
         os.remove(RUNNING_FILE)
     except Exception:
         pass
-    return 1 if FAILED else 0
+    # 退出码只看「可处理」的故障 —— 长期项不该让服务永远 exit 1
+    # （否则 OnFailure 每次都触发，每次都被 dedup 抑制，纯浪费）
+    return 1 if actionable else 0
 
 
 if __name__ == "__main__":

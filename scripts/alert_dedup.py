@@ -72,6 +72,17 @@ def current_failures():
     try:
         data = json.loads(RESULT_FILE.read_text(encoding="utf-8"))
         started = data.get("startedAt")
+        # 优先用「可处理」列表（2026-10-26 加）：
+        # 「等用户」的长期项（如单 provider、明文凭证）不触发告警 ——
+        # 它们每天都成立，告警只会每次都被去重抑制，纯消耗，
+        # 还会稀释真故障的注意力。信息仍保留在结果文件里，不丢。
+        if "actionable" in data:
+            actionable = list(data.get("actionable") or [])
+            waiting = list(data.get("waiting") or [])
+            if waiting and not actionable:
+                print(f"[alert-dedup] 只有长期项（等用户处理），不告警：{len(waiting)} 项")
+                return [], 0
+            return actionable, 1 if actionable else 0
         age_ok = True
         if started:
             try:
