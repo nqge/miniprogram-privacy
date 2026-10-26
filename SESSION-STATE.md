@@ -367,3 +367,17 @@
 **验证**: status=ok 58s delivered=True；结构仍 1 学习 + 1 反思（233/456 字）
 **教训**: 改任务负载必须同步改超时；未设 timeout 不是"无限"而是"默认 30s"
 **残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
+
+### 2026-10-26 11:20 心跳 — 更正上轮错误说法 + 纯脚本改用 systemd timer
+**⚠️ 更正**: 上轮我说「agentTurn 默认 timeout 是 30s」是**错的**。源码确认
+   `AGENT_TURN_SAFETY_TIMEOUT_MS = 60*6e4 = 360s`。我误把 apply.runtime 的 30s
+   当成了 cron 默认值。实际 healthcheck 27s/360s=7.5%（宽松），log-cleanup 261s/360s=73%（才紧）
+**发现**: log-cleanup 跑一次 261s，但脚本本身 20ms —— agentTurn 型 cron 为跑一个 shell
+   脚本消耗了 261 秒模型时间，纯浪费
+**修法**:
+- 新建 `openclaw-log-cleanup.service` + `.timer`（systemd user，OnCalendar 04:30, oneshot）
+  实测 exit 0, CPU 21ms
+- 删除原 agentTurn 型 log-cleanup cron
+- healthcheck【B】组新增 timer 断言（注入故障验证：停 timer → 立刻 FAIL ✅）
+**教训**: 更正要写进记忆文件（否则下个会话当事实继承）；质疑「为什么用重机制做轻事」
+**残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客

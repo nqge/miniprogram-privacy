@@ -78,6 +78,11 @@ for svc in openclaw-gateway.service openclaw-embed-proxy.service; do
   [ "$state" = "active" ] && [ "$en" != "enabled" ] && warn "$svc 未设开机自启（enabled=$en）"
 done
 
+# systemd timer（纯脚本任务用 timer 跑，不消耗模型时间）
+tmr=$(systemctl --user is-active openclaw-log-cleanup.timer 2>/dev/null)
+if [ "$tmr" = "active" ]; then ok "openclaw-log-cleanup.timer = active"
+else bad "openclaw-log-cleanup.timer = ${tmr:-missing} — 日志轮转不会自动清理"; fi
+
 # ── C. 记忆索引 ───────────────────────────────────
 echo ""
 echo "【C】记忆索引"
