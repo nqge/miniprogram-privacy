@@ -981,8 +981,7 @@ if tos_map:
         print(f"PASS cron 超时余量合理（{lo}s–{hi}s）")
 print(f"__TO_FAILED__={failed}")
 PY5
-)
-to_fail=$(echo "$to_report" | grep -oP '__TO_FAILED__=\K[0-9]+')
+)to_fail=$(echo "$to_report" | grep -oP '__TO_FAILED__=\K[0-9]+')
 to_fail=${to_fail:-0}
 while IFS= read -r line; do
   case "$line" in
@@ -991,6 +990,119 @@ while IFS= read -r line; do
     WARN*) warn "${line#WARN }" ;;
   esac
 done <<< "$to_report"
+PASS=$((PASS + 1))
+
+echo "【U】cron 实测耗时 vs 超时余量（防明天早上撞超时）"
+
+# 2026-10-27 07:10 补：
+# 【R】组把各任务的 timeout **互相比较**（lo < hi*0.6），
+# 但**从不跟真实耗时比** → 巡检本身长到 500s 也没人知道。
+#
+# 真实数据（07:00 无人值守那次）：
+#   巡检 cron 耗时 298s / timeout 600s = **50% 余量**
+#   其中脚本本身 ~156s，其余 ~140s 是 LLM 推理/嵌入调用的开销
+#   而巡检一周前只要 25s → 一周长了 11 倍
+# → 趋势本身就是风险：**没有任何断言看得见这个趋势**
+#
+# 判据（用真实运行历史，不重跑脚本 —— 重跑会自我指涉且很贵）：
+#   1) 最近一次实测耗时 / timeout > 0.7 → FAIL（余量告急）
+#   2) 同一任务最近 3 次耗时呈上升趋势且已 > 0.5 → WARN（在长）
+#   3) 有任务最近失败且原因是超时 → FAIL
+
+u_report=$(python3 - << 'PY8' 2>/dev/null
+import json, subprocess, os, glob
+
+failed = 0
+warned = 0
+
+def cron_jobs():
+    p = '/root/.openclaw/cron/jobs.json'
+    try:
+        d = json.load(open(p, encoding='utf-8'))
+        return d if isinstance(d, list) else d.get('jobs', [])
+    except Exception:
+        return []
+
+jobs = cron_jobs()
+tos = {}
+for j in jobs:
+    p = j.get('payload') or {}
+    if p.get('kind') == 'agentTurn':
+        tos[j.get('name')] = p.get('timeoutSeconds') or 0
+
+# 从各任务的 session/运行记录里找实测耗时
+def durations(name):
+    """从 openclaw 的 cron 运行历史里取该任务的最近耗时(ms)"""
+    out = []
+    try:
+        r = subprocess.run(['openclaw', 'cron', 'runs', '--limit', '8',
+                            '--id', CRON_ID_FOR[name]],
+                           capture_output=True, text=True, timeout=60)
+        d = json.loads(r.stdout[r.stdout.find('{'):])
+        for e in d.get('entries', []):
+            dur = e.get('durationMs')
+            ts = e.get('runAtMs') or e.get('ts') or 0
+            if dur:
+                out.append((ts, dur, e.get('status'),
+                            e.get('lastDeliveryStatus') or e.get('deliveryStatus')))
+    except Exception:
+        pass
+    return out
+
+CRON_ID_FOR = {}
+for j in jobs:
+    CRON_ID_FOR[j.get('name')] = j.get('id')
+
+problems = []
+trend_warn = []
+for name, tsec in tos.items():
+    if tsec <= 0:
+        continue
+    ds = durations(name)
+    if not ds:
+        continue
+    # ⚠️ 必须按**时间**排序，不能按耗时排序 ——
+    # 按耗时排会把「最慢的那次」当成「最近的那次」，
+    # 于是早已修好的 backup-audit（历史 600s 超时）会被当成现状 → 假 FAIL。
+    ds.sort(key=lambda x: x[0])
+    last = ds[-1]
+    ratio = last[1] / 1000.0 / tsec
+    if ratio > 0.7:
+        problems.append(f"{name} 最近一次耗时 {last[1]/1000:.0f}s / 超时 {tsec}s "
+                        f"= {ratio*100:.0f}% —— 余量告急，下次可能撞超时")
+    # 趋势：最近 3 次是否持续上升
+    if len(ds) >= 3:
+        recent = [x[1] for x in ds[-3:]]
+        if recent[0] < recent[1] < recent[2] and recent[2]/1000.0/tsec > 0.5:
+            trend_warn.append(f"{name} 最近 3 次耗时递增 "
+                              f"{recent[0]/1000:.0f}s→{recent[1]/1000:.0f}s→{recent[2]/1000:.0f}s"
+                              f"（超时 {tsec}s）—— 在长")
+    # 因超时而失败的（只看最近一次）
+    ts, dur, st, dl = last
+    if st == 'error' and dl and 'timeout' in str(dl).lower():
+        problems.append(f"{name} 最近因超时失败（{dl}）—— 见 E35：慢的是等法不是任务")
+
+for p in problems:
+    print(f"FAIL {p}")
+    failed = 1
+for w in trend_warn:
+    print(f"WARN {w}")
+    warned = 1
+if not problems and not trend_warn:
+    print("PASS 所有 agentTurn 任务的实测耗时都留有余量")
+print(f"__U_FAILED__={failed}")
+print(f"__U_WARNED__={warned}")
+PY8
+)
+u_fail=$(echo "$u_report" | grep -oP '__U_FAILED__=\K[0-9]+'); u_fail=${u_fail:-0}
+u_warn=$(echo "$u_report" | grep -oP '__U_WARNED__=\K[0-9]+'); u_warn=${u_warn:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$u_report"
 PASS=$((PASS + 1))
 
 echo "【Q】cron 指令是否与脚本同步（防过期手册）"
