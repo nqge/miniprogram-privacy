@@ -543,5 +543,25 @@
    embed-proxy 仍 active、health 正常、**记忆检索仍可用**（搜「牛哥哥 称呼」→ MEMORY.md:1）
 **意义**: 这是今天所有修复能长期成立的前提 —— 否则只是「本次会话能用」
 **教训**: 新增依赖必须显式检查隔离性（最容易隐式绑定的地方）
+**巡检现状（快照）**: 12 组断言（A-L），PASS=37 FAIL=2 WARN=1
+**残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
+
+### 2026-10-26 15:10 心跳 — 快速健康子集 + 30 分钟 systemd 告警（候选 #2 完成）
+**起因**: proactive-tracker 候选 #2 —— 凌晨 3 点服务挂了要等 4 小时才通知
+**已做**:
+1. `scripts/quick_health.py` 快速子集（5.4s vs 完整巡检 72s）：
+   外部API(飞书/GitHub/嵌入代理) · 服务状态 · 记忆索引(读sqlite不调embedding) · cron投递状态
+2. systemd 单元：quick-health.service + .timer(30min) + alert@.service(OnFailure)
+3. 告警链路**刻意独立** —— 告警单元与被监控单元互不依赖（今天刚发现飞书投递曾静默失效）
+**注入故障验收**:
+- 停 embed-proxy → 2 项 FAIL → OnFailure 触发 → 飞书 code:0 success（真送达）✅
+- 清空记忆索引 → ❌ FAIL「记忆索引为空」✅
+- 恢复 → Result=success，timer 正常调度
+**🔴 踩坑**: 交互 shell 正常但 systemd 下连挂两项 ——
+   ① systemd PATH 不含 /root/.local/share/pnpm → openclaw 找不到
+   ② systemd 无 XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS → systemctl --user 报 unknown
+   → 单元里显式写全 5 个环境变量才通
+**教训**: 同一个脚本在 shell 跑通 ≠ 在调度器跑通（今天第三次栽这类问题）；
+   验证环境必须与生产环境一致；告警路径不能挂在被监控路径上
 **巡检现状**: 12 组断言（A-L），PASS=37 FAIL=2 WARN=1
 **残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
