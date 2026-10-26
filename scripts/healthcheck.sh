@@ -751,6 +751,62 @@ while IFS= read -r line; do
 done <<< "$mem_report"
 PASS=$((PASS + 1))
 
+echo "【T】cron 指令的防复发提醒是否齐全"
+
+# 2026-10-27 07:20 补：E33/E35 之后，cron 指令里加了两类「防复发提醒」：
+#   · 【跨日提醒】—— 写 memory/YYYY-MM-DD.md 前用 `date +%F`
+#     （E33：跨零点还写昨天文件 → 时间线失真，且**没有任何失败信号**）
+#   · 【等待方式】—— 跑长脚本用短 poll，别一次等满
+#     （E35：poll 会阻塞满 timeout，3 次 ≈ 510s → 必然撞 job 超时）
+#
+# 但这些提醒是我**一条条手动加**的 —— 加漏了没有任何机制会发现。
+# （这正是 E34 的老问题：靠「记得做」。）
+# 现在自动核对：**每个会写每日笔记 / 跑长脚本的任务，都必须有对应提醒**。
+
+cr_report=$(python3 - << 'PY7' 2>/dev/null
+import json, subprocess
+failed = 0
+try:
+    r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
+                       capture_output=True, text=True, timeout=60)
+    jobs, _ = json.JSONDecoder().raw_decode(r.stdout[r.stdout.find('['):])
+except Exception as e:
+    print(f"FAIL 读不到 cron 任务（{type(e).__name__}）")
+    raise SystemExit(1)
+
+# 会写 memory/YYYY-MM-DD.md 的任务 → 必须有跨日提醒
+need_date = {'healthcheck', 'backup-audit', 'daily-learning', 'daily-reflection'}
+# 会跑可能较久的脚本 → 必须有等待方式说明
+need_wait = {'healthcheck', 'backup-audit', 'teahouse-monitor'}
+
+problems = []
+for j in jobs:
+    name = j.get('name')
+    msg = (j.get('payload') or {}).get('message', '')
+    if name in need_date and '跨日提醒' not in msg:
+        problems.append(f"{name} 会写每日笔记但指令里没有【跨日提醒】")
+    if name in need_wait and '等待方式' not in msg:
+        problems.append(f"{name} 会跑脚本但指令里没有【等待方式】")
+
+if problems:
+    for p in problems:
+        print(f"FAIL {p}")
+    failed = 1
+else:
+    print(f"PASS cron 指令的防复发提醒齐全（{len(jobs)} 个任务已核对）")
+print(f"__CR_FAILED__={failed}")
+PY7
+)
+cr_fail=$(echo "$cr_report" | grep -oP '__CR_FAILED__=\K[0-9]+')
+cr_fail=${cr_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$cr_report"
+PASS=$((PASS + 1))
+
 echo "【S】连续性入口的「当前状态」是否过期"
 
 # 2026-10-27 05:15 补：SESSION-STATE.md 头部的「📋 系统状态」小节是**手写的**，
