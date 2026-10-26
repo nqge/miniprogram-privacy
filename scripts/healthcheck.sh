@@ -328,6 +328,59 @@ case "$feishu_out" in
   *) bad "飞书 API 实际不可用（$feishu_out）" ;;
 esac
 
+# ── I. 茶馆内容蒸馏进度 ───────────────────────────
+echo ""
+echo "【I】茶馆内容蒸馏进度"
+
+distill_report=$(python3 - << 'PY' 2>/dev/null
+import json, os, re, glob
+WS = '/root/.openclaw/workspace'
+todo = f'{WS}/memory/teahouse-todo.json'
+failed = 0
+pending = []
+if os.path.exists(todo):
+    try:
+        pending = json.load(open(todo, encoding='utf-8')).get('pending', [])
+    except Exception:
+        pending = []
+if not pending:
+    print("PASS 茶馆内容已全部蒸馏（无待处理）")
+else:
+    # 检查这些讨论编号是否已在 memory/ 的**每日笔记**里出现过
+    # （排除 teahouse-digest-*.md 蒸馏稿本身，否则会被自己的输出骗过）
+    still = []
+    notes = [f for f in glob.glob(f'{WS}/memory/*.md')
+             if not os.path.basename(f).startswith('teahouse-digest-')]
+    for p in pending:
+        num = f"#{p.get('number')}"
+        found = False
+        for f in notes:
+            try:
+                if num in open(f, encoding='utf-8', errors='replace').read():
+                    found = True
+                    break
+            except Exception:
+                pass
+        if not found:
+            still.append(p)
+    if still:
+        print(f"FAIL 茶馆有 {len(still)} 条讨论未蒸馏（原始 dump 已落盘但未提炼成知识）")
+        failed = 1
+    else:
+        print("PASS 茶馆内容已全部蒸馏")
+print(f"__DISTILL_FAILED__={failed}")
+PY
+)
+distill_fail=$(echo "$distill_report" | grep -oP '__DISTILL_FAILED__=\K[0-9]+')
+distill_fail=${distill_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$distill_report"
+PASS=$((PASS + 1))
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"

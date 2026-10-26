@@ -160,6 +160,41 @@ def main():
         print(f"  * #{i['number']} {i['title'][:60]}")
 
     prune_old_digests()
+    prompt_distillation(fresh)
+
+
+def prompt_distillation(fresh):
+    """新内容落盘 ≠ 变成知识。
+
+    原始 dump 只是数据；没有提炼进 memory/ 的对话不会影响我的判断。
+    这里把新讨论列入「待蒸馏清单」，由 daily-learning 或心跳时人工/agent 提炼。
+    """
+    if not fresh:
+        return
+    todo = Path("/root/.openclaw/workspace/memory/teahouse-todo.json")
+    try:
+        existing = json.loads(todo.read_text(encoding="utf-8")) if todo.exists() else {"pending": []}
+    except Exception:
+        existing = {"pending": []}
+    known = {p["number"] for p in existing.get("pending", [])}
+    added = 0
+    for i in fresh:
+        n = int(i["number"])
+        if n in known:
+            continue
+        existing.setdefault("pending", []).append({
+            "number": n,
+            "title": (i.get("title") or "")[:100],
+            "url": i.get("html_url", ""),
+            "comments": i.get("comments", 0),
+        })
+        added += 1
+    existing["pending"] = existing["pending"][-50:]  # 清单本身也限量
+    try:
+        todo.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[teahouse] 待蒸馏清单新增 {added} 条（当前 {len(existing['pending'])} 条待处理）")
+    except Exception as e:
+        print(f"[teahouse] 写待蒸馏清单失败（忽略）: {e}")
 
 
 def prune_old_digests(keep=5):
