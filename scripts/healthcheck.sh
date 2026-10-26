@@ -739,6 +739,54 @@ while IFS= read -r line; do
 done <<< "$mem_report"
 PASS=$((PASS + 1))
 
+echo "【P】每日笔记日期归属（跨日写入检测）"
+
+# 2026-10-27 03:00 补：会话跨过零点后，我**继续往 10-26.md 里写**，
+# 导致 10-26.md 里混着两天内容（72 个索引块里有 30 个属于 10-27）。
+# 后果：
+#   - 每日笔记的时间线失真（「10-26 的日志」里写着 10-27 的事）
+#   - daily-learning「读最近 2 天日志」会读到错配的内容
+#
+# 判据设计（第一版是错的）：全文搜日期会**大量误报** ——
+# 历史笔记里合法地引用更晚的日期（10-25 的补记里提到 10-26）。
+# 正确做法：只看**小节标题**里的日期，且必须晚于文件名。
+# → 7 个历史文件零误报，用拆分前的备份能精确抓到 5 个越界小节。
+
+date_report=$(python3 - << 'PY3' 2>/dev/null
+import glob, os, re
+WS = '/root/.openclaw/workspace'
+bad_files = []
+for f in sorted(glob.glob(f'{WS}/memory/2026-*.md')):
+    base = os.path.basename(f)[:-3]          # 2026-10-26
+    try:
+        txt = open(f, encoding='utf-8', errors='replace').read()
+    except Exception:
+        continue
+    offenders = []
+    # 只看标题行（## 或 ###）里的日期
+    for m in re.finditer(r'^#{2,3} .*?(20\d\d-\d\d-\d\d)', txt, re.M):
+        d = m.group(1)
+        if d > base:
+            offenders.append(d)
+    if offenders:
+        bad_files.append((os.path.basename(f), sorted(set(offenders))))
+
+if bad_files:
+    for name, dates in bad_files:
+        print(f"FAIL {name} 里的小节日期晚于文件名（{', '.join(dates)}）"
+              f" —— 跨日后应写入新日期的文件")
+else:
+    print("PASS 每日笔记日期归属正确（无跨日写入）")
+PY3
+)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$date_report"
+PASS=$((PASS + 1))
+
 echo "【O】L1 计数一致性（防止手改文档后过期）"
 
 # 2026-10-27 补：MEMORY.md / L1 主库头部的「N 条」是**手写的**，
