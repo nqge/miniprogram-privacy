@@ -741,3 +741,17 @@
    把「不要做什么」写进指令，比「要做什么」更能防止误伤
 **巡检现状**: 12 组断言（A-L），PASS=41 FAIL=2 WARN=1
 **残留项**: 1 PAT 吊销（需牛哥哥本人）· 5 博客方向
+
+### 2026-10-26 17:30 心跳 — 明天 07:00 链路交付前检查（未改代码）
+**逐环验证**:
+1. cron 配置: 0 7 * * * Asia/Shanghai / 指令 942 字符 / announce→open_id / 上次 ok+delivered ✅
+2. 巡检脚本 12 组断言 A-L 就位 ✅
+3. 依赖: 5 脚本可读 + 7 外部命令可用 ✅
+4. isolated session 的 PATH: **从 17:13 真实运行反推**（该 session 成功执行过
+   openclaw cron list，【D】组报出「5 个全部 delivered=True」）→ 证明可用 ✅
+5. 前置任务不冲突: log-cleanup 只动 /tmp/openclaw，巡检【E】组扫
+   /root/.openclaw/agents/main/sessions/ → 不重叠 ✅
+**教训**: 验证优先用「真实运行过的样本」而不是复现环境；
+  改动多之后要留一轮交付前检查，否则等于赌明天能跑
+**巡检现状**: 12 组断言（A-L），PASS=41 FAIL=2 WARN=1
+**残留项**: 1 PAT 吊销（需牛哥哥本人）· 5 博客方向
