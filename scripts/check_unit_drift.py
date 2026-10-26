@@ -196,6 +196,28 @@ def main():
     except FileNotFoundError:
         ok("sessions 目录不存在（跳过）")
 
+    print("【单元文件权限】")
+    # 2026-10-26 实测：openclaw-gateway.service 里明文写着 OPENSUBTITLES 密码/密钥，
+    # 而单元文件默认 644 → 同机任何用户都能读到。已收紧到 600。
+    # 这里断言所有「含凭据的」单元文件都不是 group/other 可读。
+    import glob as _glob
+    import re as _re
+    for uf in sorted(_glob.glob("/root/.config/systemd/user/*.service")
+                     + _glob.glob("/root/.config/systemd/user/*.timer")):
+        try:
+            body = open(uf, encoding="utf-8").read()
+        except Exception:
+            continue
+        cred = _re.search(r"(?:PASSWORD|TOKEN|SECRET|API_KEY)=([^\n\"']+)", body)
+        if not cred:
+            continue
+        name = os.path.basename(uf)
+        m = os.stat(uf).st_mode & 0o777
+        if m & 0o077:
+            bad(f"{name} 含明文凭据但权限 {oct(m)[2:]} —— 其他用户可读")
+        else:
+            ok(f"{name} 含凭据，权限 {oct(m)[2:]}（仅 root 可读）")
+
     print("【定时器调度】")
     for timer, props in TIMERS.items():
         for prop, sub, desc in props:
