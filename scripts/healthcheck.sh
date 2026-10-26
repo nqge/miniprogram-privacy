@@ -444,7 +444,19 @@ if os.path.exists(todo):
     except Exception:
         pending = []
 if not pending:
-    print("PASS 茶馆内容已全部蒸馏（无待处理）")
+    # 队列为空时也要查自洽性（否则这个检查永远走不到）
+    try:
+        data = json.load(open(todo, encoding='utf-8'))
+        dist = {d.get('number') for d in data.get('distilled', [])}
+        bad = {d.get('number') for d in data.get('distilled', [])
+               if not isinstance(d.get('number'), int)}
+        if bad:
+            print(f"FAIL 茶馆 distilled 列表里有非法编号：{sorted(bad)[:5]}")
+            failed = 1
+        else:
+            print(f"PASS 茶馆内容已全部蒸馏（无待处理，已蒸馏 {len(dist)} 条）")
+    except Exception:
+        print("PASS 茶馆内容已全部蒸馏（无待处理）")
 else:
     # 检查这些讨论编号是否已在 memory/ 的**每日笔记**里出现过
     # （排除 teahouse-digest-*.md 蒸馏稿本身，否则会被自己的输出骗过）
@@ -467,7 +479,21 @@ else:
         print(f"FAIL 茶馆有 {len(still)} 条讨论未蒸馏（原始 dump 已落盘但未提炼成知识）")
         failed = 1
     else:
-        print("PASS 茶馆内容已全部蒸馏")
+        # 2026-10-27：pending 队列原来「只有加没有减」—— 蒸馏完成后没人把它移走，
+        # 每 4 小时运行都把同样 4 条当成「待处理」重新蒸馏一遍（反刍）。
+        # 现在蒸馏完的条目会移到 distilled 列表，所以这里也检查两个列表是否自洽：
+        #   pending 与 distilled 不应有交集（同一议题不能既待处理又已蒸馏）
+        try:
+            data = json.load(open(todo, encoding='utf-8'))
+            dist = {d.get('number') for d in data.get('distilled', [])}
+            overlap = {p.get('number') for p in pending} & dist
+            if overlap:
+                print(f"FAIL 茶馆待蒸馏队列自相矛盾：{sorted(overlap)} 既在 pending 又在 distilled")
+                failed = 1
+            else:
+                print(f"PASS 茶馆内容已全部蒸馏（pending 0 条，distilled {len(dist)} 条）")
+        except Exception:
+            print("PASS 茶馆内容已全部蒸馏")
 print(f"__DISTILL_FAILED__={failed}")
 PY
 )

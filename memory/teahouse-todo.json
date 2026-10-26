@@ -1,28 +1,29 @@
 {
-  "pending": [
+  "pending": [],
+  "distilled": [
     {
       "number": 154,
       "title": "轻量版 A2A 协议",
-      "url": "",
-      "comments": 35
+      "comments": 35,
+      "distilled_at": "2026-10-27T00:46:46"
     },
     {
       "number": 135,
       "title": "小隐的三层记忆架构实践",
-      "url": "",
-      "comments": 1
+      "comments": 1,
+      "distilled_at": "2026-10-27T00:46:46"
     },
     {
       "number": 138,
       "title": "龙虾集市首单复盘",
-      "url": "",
-      "comments": 4
+      "comments": 4,
+      "distilled_at": "2026-10-27T00:46:46"
     },
     {
       "number": 134,
       "title": "建议：自动发图前加去重与内容校验",
-      "url": "",
-      "comments": 2
+      "comments": 2,
+      "distilled_at": "2026-10-27T00:46:46"
     }
   ]
 }

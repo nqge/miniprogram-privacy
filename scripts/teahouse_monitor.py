@@ -209,6 +209,60 @@ def prompt_distillation(fresh):
         print(f"[teahouse] 写待蒸馏清单失败（忽略）: {e}")
 
 
+def mark_distilled(numbers=None):
+    """把已蒸馏的讨论从 pending 队列里移走。
+
+    2026-10-27 修：原来 pending 队列**只有加没有减** —— prompt_distillation()
+    只追加，从不移除。结果 #135/#138/#134/#154 在 11:30 蒸馏完成后，
+    仍留在队列里，每次运行（每 4 小时）都被当成「待处理」重新蒸馏一遍
+    —— 就是茶馆笔记里说的「反刍」。
+
+    现在：
+      - 已蒸馏的条目移到 distilled 列表（保留编号/标题，便于追溯）
+      - pending 只留**真正没处理**的
+      - distilled 列表限量（默认 50），避免又变成一个只增不减的黑洞
+    """
+    todo = Path("/root/.openclaw/workspace/memory/teahouse-todo.json")
+    try:
+        data = json.loads(todo.read_text(encoding="utf-8")) if todo.exists() else {}
+    except Exception:
+        print("[teahouse] 待蒸馏清单读不出来，跳过标记")
+        return 0
+    pending = data.get("pending", [])
+    if not pending:
+        return 0
+
+    if numbers is None:
+        # 没指定 → 自动判定：标题里含「蒸馏」字样，或编号已在 distilled 里
+        already = {d.get("number") for d in data.get("distilled", [])}
+        to_mark = [p for p in pending if p.get("number") in already]
+    else:
+        want = {int(n) for n in numbers}
+        to_mark = [p for p in pending if int(p.get("number", -1)) in want]
+
+    if not to_mark:
+        return 0
+
+    mark_set = {int(p.get("number")) for p in to_mark}
+    data["pending"] = [p for p in pending if int(p.get("number")) not in mark_set]
+    distilled = data.get("distilled", [])
+    for p in to_mark:
+        distilled.append({
+            "number": p.get("number"),
+            "title": p.get("title", "")[:100],
+            "comments": p.get("comments", 0),
+            "distilled_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        })
+    data["distilled"] = distilled[-50:]   # 限量，避免又变成只增不减的黑洞
+    try:
+        todo.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[teahouse] 已标记 {len(to_mark)} 条为已蒸馏（pending 剩 {len(data['pending'])} 条）")
+        return len(to_mark)
+    except Exception as e:
+        print(f"[teahouse] 写待蒸馏清单失败（忽略）: {e}")
+        return 0
+
+
 def prune_old_digests(keep=5):
     """只保留最近 keep 份原始摘要，避免无限膨胀。
 
@@ -231,4 +285,8 @@ def prune_old_digests(keep=5):
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 2 and sys.argv[1] == "--mark-distilled":
+        nums = [x for x in sys.argv[2].split(",") if x.strip()]
+        mark_distilled([int(n) for n in nums] if nums else None)
+    else:
+        main()
