@@ -136,3 +136,31 @@ agents.defaults.memorySearch = {
 - `chunking.tokens=200`（默认 400）实测最优；一个 chunk 混两个主题会把向量平均掉
 - 上游 `buildFtsQuery` 用 **AND 拼接带引号短语** → 多词中文查询 BM25 直接 0 命中
   → 检索几乎全靠向量，这也解释了为什么 minScore 要调得这么低
+
+---
+
+## 🩺 全链路健康巡检（2026-10-26 新增）
+
+```bash
+bash scripts/healthcheck.sh          # 手动跑，退出码 0=全通过
+```
+cron `healthcheck` 每日 07:00 自动跑（isolated / no-deliver）。
+
+**为什么有它**：2026-10-26 一天发现三个「status=ok 但功能是死的」——
+记忆检索（enabled 但 Embeddings unavailable，从 3 月起就是死的）、
+飞书投递（cron 正常但从未送达）、学习笔记（任务不报错但周频让 4/8 天根本不触发）。
+**状态字段描述的是「任务跑完了」，不是「用户得到了结果」。**
+
+**四组断言**：
+| 组 | 查什么 | 抓什么问题 |
+|---|---|---|
+| A | 飞书 / GitHub / 嵌入代理 | 外部依赖挂了但没人知道 |
+| B | gateway / embed-proxy systemd 状态 + 开机自启 | 服务掉了 |
+| C | Embeddings ready / 索引完整 / Dirty=no | 记忆检索失效、索引滞后 |
+| D | announce 型 cron 必须 delivered=True | 投递静默失败 |
+
+**踩过的坑**：
+- `Embeddings:` 字段**只在 `openclaw memory status --deep` 出现**，不加 `--deep` 读不到
+- 判定逻辑要**单独单测** —— 第一版跑出 PASS=18，但里面藏着一个"永远抓不到故障"的分支
+- 直接改 `cron/jobs.json` **测不出故障** —— CLI 读的是 gateway 内存态，不是文件
+

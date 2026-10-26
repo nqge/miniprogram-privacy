@@ -314,3 +314,15 @@
 **3. 索引**: 补记写完后索引落后 → 补跑 → 11/11 files · 96 chunks
 **教训**: 「失败」≠「没触发」，前者修任务后者修调度；测 provider 必须用对协议
 **残留项**: 第 1 项吊销 PAT（建议尽快）+ 第 5 项博客（不急）
+
+### 2026-10-26 10:50 心跳 — proactive-tracker 补记 + 全链路巡检落地
+**1. proactive-tracker.md** 补记完成（8→17 项），P1/P2/P3 标记已解决，
+   新增 **P4「状态绿≠功能在」**（今天三个同族故障的归纳）与 **P5「协议/坐标系想当然」**
+**2. 新增 `scripts/healthcheck.sh`** — 四组主动断言（外部API / systemd / 记忆索引 / cron投递）
+   + 配套 `scripts/check_cron_delivery.py`
+**3. 修了巡检自己的 3 个 bug**: Embeddings 需 --deep / 【D】段引号转义 / 新任务 None 误判
+**4. 灵敏度已单测**: 4 场景正确捕获 2 故障；Embeddings 分支两态均验证
+   ⚠️ 直接改 cron/jobs.json 测不出 —— CLI 读 gateway 内存态
+**5. 清理 3 个孤儿 cron**（enabled=false 僵尸，04-02 迁移残留，CLI 不显示）
+**6. 新增 cron `healthcheck`（每日 07:00）** 实跑 status=ok 25s，巡检 PASS=20 FAIL=0
+**残留项**: 第 1 项吊销 PAT（建议尽快）+ 第 5 项博客（不急）

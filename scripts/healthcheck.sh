@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# 全链路健康巡检 —— 捕捉「状态绿但功能死」的静默失败
+#
+# 背景（2026-10-26 血泪史）：
+#   今天发现三个「status=ok 但实际没工作」的功能：
+#     1. 记忆检索：enabled 但 Embeddings unavailable，索引 0/11（从 3 月起就是死的）
+#     2. 飞书投递：cron status=ok / consecutiveErrors=0，但结果从未送达
+#     3. 学习笔记：任务不报错，但周频调度决定了 4/8 天根本不触发
+#   错误信息只能告诉你「已经崩了」的东西 —— 沉默的失败必须靠**主动断言**才能发现。
+#
+# 这个脚本做 4 组断言：
+#   A. 外部 API 连通性（飞书 / GitHub / MiniMax embeddings）
+#   B. systemd 服务状态（gateway / embed-proxy）
+#   C. 记忆索引新鲜度（文件数 / chunks / Dirty）
+#   D. 定时任务投递结果（announce 型必须 delivered=True）
+#
+# 退出码：0 = 全通过；1 = 有 FAIL
+
+set -uo pipefail
+
+WORKSPACE="/root/.openclaw/workspace"
+CFG="/root/.openclaw/openclaw.json"
+PROXY_HEALTH="http://127.0.0.1:8799/health"
+
+PASS=0; FAIL=0; WARN=0
+declare -a FAILED_ITEMS=()
+
+ok()   { PASS=$((PASS+1)); printf "  \033[32m✅ PASS\033[0m  %s\n" "$1"; }
+bad()  { FAIL=$((FAIL+1)); FAILED_ITEMS+=("$1"); printf "  \033[31m❌ FAIL\033[0m  %s\n" "$1"; }
+warn() { WARN=$((WARN+1)); printf "  \033[33m⚠️  WARN\033[0m  %s\n" "$1"; }
+
+echo "════════════════════════════════════════════"
+echo " 全链路健康巡检  $(date '+%Y-%m-%d %H:%M:%S')"
+echo "════════════════════════════════════════════"
+
+# ── A. 外部 API 连通性 ─────────────────────────────
+echo ""
+echo "【A】外部 API 连通性"
+
+# A1 飞书 token
+fs_out=$(python3 - << 'PY' 2>&1
+import json, urllib.request
+try:
+    c = json.load(open('/root/.openclaw/openclaw.json'))
+    f = c['channels']['feishu']
+    req = urllib.request.Request(
+        'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+        data=json.dumps({"app_id": f['appId'], "app_secret": f['appSecret']}).encode(),
+        headers={'Content-Type': 'application/json'}, method='POST')
+    d = json.load(urllib.request.urlopen(req, timeout=15))
+    print('OK' if d.get('tenant_access_token') else f"FAIL:{d.get('msg')}")
+except Exception as e:
+    print(f'FAIL:{type(e).__name__}')
+PY
+)
+if [ "${fs_out:0:2}" = "OK" ]; then ok "飞书 API token 可获取"
+else bad "飞书 API token 获取失败 — ${fs_out}"; fi
+
+# A2 GitHub API（茶馆监控依赖）
+gh_code=$(curl -s -m 15 -o /dev/null -w "%{http_code}" https://api.github.com/repos/ythx-101/openclaw-qa/issues 2>/dev/null)
+if [ "$gh_code" = "200" ]; then ok "GitHub API 可达（茶馆监控依赖）"
+else bad "GitHub API 返回 ${gh_code} — 茶馆监控会失败"; fi
+
+# A3 embeddings 代理
+px_out=$(curl -s -m 8 "$PROXY_HEALTH" 2>/dev/null)
+if echo "$px_out" | grep -q '"ok":true'; then ok "嵌入代理健康（记忆检索依赖）"
+else bad "嵌入代理不可用 — 记忆检索会失效 — ${px_out}"; fi
+
+# ── B. 服务状态 ───────────────────────────────────
+echo ""
+echo "【B】服务状态"
+
+for svc in openclaw-gateway.service openclaw-embed-proxy.service; do
+  state=$(systemctl --user is-active "$svc" 2>/dev/null)
+  if [ "$state" = "active" ]; then ok "$svc = $state"
+  else bad "$svc = ${state:-missing}"; fi
+  en=$(systemctl --user is-enabled "$svc" 2>/dev/null)
+  [ "$state" = "active" ] && [ "$en" != "enabled" ] && warn "$svc 未设开机自启（enabled=$en）"
+done
+
+# ── C. 记忆索引 ───────────────────────────────────
+echo ""
+echo "【C】记忆索引"
+
+mem_out=$(openclaw memory status --deep 2>/dev/null | grep -v '^\[plugins\]')
+idx=$(echo "$mem_out" | grep -oP 'Indexed:\s*\K[0-9]+/[0-9]+')
+chunks=$(echo "$mem_out" | grep -oP 'Indexed:.*chunks' | grep -oP '\K[0-9]+(?= chunks)')
+dirty=$(echo "$mem_out" | grep -oP 'Dirty:\s*\K\w+')
+emb=$(echo "$mem_out" | grep -oP 'Embeddings:\s*\K\w+')
+
+[ "$emb" = "ready" ] && ok "Embeddings: ready" || bad "Embeddings: ${emb:-unknown} — 记忆检索不可用"
+
+if [ -n "$idx" ]; then
+  got=${idx%%/*}; tot=${idx##*/}
+  if [ "$got" = "$tot" ] && [ "$tot" -gt 0 ]; then ok "索引完整 $idx files · ${chunks:-0} chunks"
+  else bad "索引不完整 $idx（部分文件未索引）"; fi
+else
+  bad "无法读取索引状态"
+fi
+
+[ "$dirty" = "no" ] && ok "索引未过期（Dirty: no）" || warn "索引待更新（Dirty: ${dirty:-?}）— 新写的记忆还没进索引"
+
+# ── D. 定时任务投递 ───────────────────────────────
+echo ""
+echo "【D】定时任务投递结果"
+
+cron_out=$(python3 "$WORKSPACE/scripts/check_cron_delivery.py" 2>/dev/null)
+cron_fail=$(echo "$cron_out" | grep -oP '__FAILED__=\K[0-9]+')
+cron_fail=${cron_fail:-0}
+
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$cron_out"
+
+PASS=$((PASS + 6 - cron_fail))
+
+# ── 汇总 ─────────────────────────────────────────
+echo ""
+echo "════════════════════════════════════════════"
+echo " 结果: PASS=$PASS  FAIL=$FAIL  WARN=$WARN"
+if [ "$FAIL" -gt 0 ]; then
+  echo ""
+  echo " ⚠️ 有 $FAIL 项失败，需要处理。"
+  for it in "${FAILED_ITEMS[@]}"; do echo "   - $it"; done
+  echo ""
+  echo " 提示：静默失败优先排查「触发→执行→落盘→投递」每一段，别只看状态字段。"
+fi
+echo "════════════════════════════════════════════"
+
+[ "$FAIL" -gt 0 ] && exit 1
+exit 0
