@@ -88,7 +88,11 @@ echo ""
 echo "【5】关键目录备份覆盖"
 for d in memory scripts skills; do
   REMOTE_COUNT=$(git ls-tree -r --name-only "$REMOTE/$BRANCH" "$d/" 2>/dev/null | wc -l)
-  LOCAL_COUNT=$(find "$d" -type f 2>/dev/null | wc -l)
+  # 本地只数「git 追踪的」文件 —— 直接 find 会把 __pycache__ 等运行时垃圾也算进去，
+  # 造成「远端 < 本地」的假告警（2026-10-26 实测踩到）
+  LOCAL_COUNT=$(git ls-files "$d/" 2>/dev/null | wc -l)
+  # 未追踪但存在、且不在 .gitignore 里的文件 = 真正漏掉的
+  UNTRACKED=$(git ls-files --others --exclude-standard "$d/" 2>/dev/null | wc -l)
   if [ "$REMOTE_COUNT" -eq 0 ]; then
     bad "$d/ 未入库"
   elif [ "$REMOTE_COUNT" -lt "$LOCAL_COUNT" ]; then
@@ -99,6 +103,8 @@ for d in memory scripts skills; do
     else
       warn "$d/ 远端 $REMOTE_COUNT 个 < 本地 $LOCAL_COUNT 个（可能漏文件）"
     fi
+  elif [ "$UNTRACKED" -gt 0 ]; then
+    warn "$d/ 有 $UNTRACKED 个未追踪文件（本地存在但未入库）"
   else
     ok "$d/ 已备份 $REMOTE_COUNT 个文件"
   fi
