@@ -296,3 +296,11 @@
 **结果**: 索引 0/11 → 11/11 · 80 chunks；`memory_search` 工具实测返回正确 chunk（称呼/中文交流/供应链投毒均精确命中）
 **教训**: 「enabled」≠「能用」；协议适配优于申请新凭证；每个参数都要实测数据定，不能用默认值
 **残留项**: 4 项（见 `待决策选项单.md`），第 1 项吊销 PAT 建议尽快
+
+### 2026-10-26 09:25 心跳 — 飞书 cron 投递 400 修复
+**问题**: daily-learning / daily-reflection 用 `channel:"last"` → 解析成 heartbeat → 飞书 user_id 无效（99992360）
+       → 任务 status=ok 但**结果从未送达牛哥哥**（bestEffort 吞掉投递失败）
+**修复**: 反查飞书 contact API 拿到牛哥哥 open_id `ou_9227741a8ff35fa4e8e83027743dc305`（敲钟牛）
+       → `cron edit --channel feishu --to <open_id>` → 测试消息 code:0 → 手动触发验证 delivered=True
+**教训**: 「status=ok」≠「用户收到了」；与记忆检索同类错误，必须验证端到端
+**残留项**: 4 项（见 `待决策选项单.md`），第 1 项吊销 PAT 建议尽快
