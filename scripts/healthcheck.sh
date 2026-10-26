@@ -283,10 +283,19 @@ echo "【F】记忆笔记结构"
 note_report=$(python3 - << 'PY' 2>/dev/null
 import glob, os, re, datetime
 MEM = '/root/.openclaw/workspace/memory'
-# 今天的日期文件（学习/反思都写在这里）
 today = datetime.date.today().isoformat()
-cands = [f'{MEM}/{today}.md', '/root/.openclaw/workspace/SESSION-STATE.md']
+
+# 2026-10-27 (E38)：F 组原来只看「今天」的文件 →
+#   历史文件里的重复小节永远抓不到（10-21 就有 2 个学习小节，一直没人发现）
+# 修法：全部 daily-note 文件都查「重复」。
+# 注意：只查重复（>1），不查缺失（==0）——
+#   · 修复前的日期（10-22/10-23）本来就没学习小节
+#   · 反思是每周日跑，工作日没有是正常的
+#   · 今天的学习小节要等 09:00 的 cron 才会生成
+daily_files = sorted(glob.glob(f'{MEM}/20??-??-??.md'))
+cands = daily_files + ['/root/.openclaw/workspace/SESSION-STATE.md']
 failed = 0
+checked = 0
 for p in cands:
     if not os.path.exists(p):
         continue
@@ -294,6 +303,9 @@ for p in cands:
     learn = re.findall(r'^## 📚 每日学习.*$', s, re.M)
     refl  = re.findall(r'^## 🪞 每日反思.*$', s, re.M)
     name = os.path.basename(p)
+    is_daily = bool(re.match(r'^\d{4}-\d{2}-\d{2}\.md$', name))
+    if is_daily:
+        checked += 1
     if len(learn) > 1:
         print(f"FAIL {name} 有 {len(learn)} 个「每日学习」小节（应只有 1 个）")
         failed += 1
@@ -307,7 +319,7 @@ for p in cands:
             print(f"FAIL {name} 小节超长 {len(body)} 字（约束 100-200 字）")
             failed += 1
 if failed == 0:
-    print("PASS 记忆笔记结构正常")
+    print(f"PASS 记忆笔记结构正常（已查 {checked} 个每日笔记文件）")
 print(f"__NOTE_FAILED__={failed}")
 PY
 )

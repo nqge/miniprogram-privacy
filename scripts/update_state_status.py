@@ -17,9 +17,16 @@ SELF = Path("/root/.openclaw/workspace/scripts/healthcheck.sh")
 
 
 def count_groups() -> int:
+    """统计 healthcheck.sh 里的断言组数。
+
+    ⚠️ 2026-10-27 (E38)：原来这里是 `【[A-L]】` —— 只匹配 A 到 L，
+    M/N/O/P/Q/R/S 全部数不到 → 「巡检现状」长期显示 12 组，实际已 19 组。
+    这正是本脚本要防的那类「硬编码数字会过期」，却出现在脚本自己身上。
+    修法：匹配任意单个大写字母 `【([A-Z])】`，不再枚举范围。
+    """
     try:
         s = SELF.read_text(encoding="utf-8", errors="replace")
-        return len(set(re.findall(r"【[A-L]】", s)))
+        return len(set(re.findall(r"【([A-Z])】", s)))
     except Exception:
         return 0
 
