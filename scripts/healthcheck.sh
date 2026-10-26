@@ -221,6 +221,55 @@ while IFS= read -r line; do
 done <<< "$note_report"
 PASS=$((PASS + 1))
 
+# ── G. 独立技能仓库同步 ───────────────────────────
+echo ""
+echo "【G】独立技能仓库同步"
+
+repo_report=$(python3 - << 'PY' 2>/dev/null
+import os, subprocess
+BASE = '/root/.openclaw/workspace/skills'
+failed = 0
+found = 0
+for name in sorted(os.listdir(BASE)):
+    d = os.path.join(BASE, name)
+    if not os.path.isdir(os.path.join(d, '.git')):
+        continue
+    found += 1
+    def git(*a):
+        r = subprocess.run(['git', '-C', d] + list(a), capture_output=True, text=True, timeout=45)
+        return r.stdout.strip()
+    try:
+        git('fetch', 'origin', '--quiet')
+    except Exception:
+        pass
+    behind = git('rev-list', '--count', '@{u}..HEAD')
+    ahead = git('rev-list', '--count', 'HEAD..@{u}')
+    dirty = len(git('status', '--short').splitlines())
+    if behind == '0' and ahead == '0' and dirty == 0:
+        print(f"PASS {name} 与远端同步")
+    else:
+        bits = []
+        if behind != '0': bits.append(f'落后 {behind}')
+        if ahead != '0': bits.append(f'领先 {ahead}')
+        if dirty: bits.append(f'未提交 {dirty}')
+        print(f"FAIL {name} 仓库不同步（{'，'.join(bits)}）")
+        failed += 1
+if found == 0:
+    print("WARN 未发现独立技能仓库")
+print(f"__REPO_FAILED__={failed}")
+PY
+)
+repo_fail=$(echo "$repo_report" | grep -oP '__REPO_FAILED__=\K[0-9]+')
+repo_fail=${repo_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$repo_report"
+PASS=$((PASS + 1))
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
