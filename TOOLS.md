@@ -183,3 +183,58 @@ cron `healthcheck` 每日 07:00 自动跑（isolated / no-deliver）。
 
 **自查触发点**：每次改完配置/参数后，回头核一遍「我之前基于什么假设做的这个改动」。
 
+
+---
+
+## 📉 日志降噪（2026-10-26 实测）
+
+`/tmp/openclaw/openclaw-YYYY-MM-DD.log` 一天能到 26M+，**大头是插件注册噪音**
+（`feishu_xxx: Registered ... tool`，INFO 级）。
+
+### ⚠️ 噪音来源：是 **agent session 启动**，不是 CLI 调用
+
+> 2026-10-26 21:35 复核更正（此前记为「每次 CLI 调用都会重新注册全部插件」——
+> **实测不成立**）：
+
+| 动作 | 产生的 Registered 行数 |
+|---|---|
+| `openclaw cron list` × 5 | **0 行** |
+| 一次 agent session 启动 | **16 行/簇**（同一秒内成簇出现） |
+
+**所以噪音的真实来源是「agent session 启动」**，每个新 session 拉起时
+重新注册全部插件并打 6+ 行。**降噪必须作用在拉起 session 的进程环境上**
+（gateway 单元的 `Environment=`），而不是指望 CLI 调用时不打。
+
+### 降噪旋钮实测（裸环境，3 次 CLI 调用）
+
+| 旋钮 | 字节/3 次 | 结论 |
+|---|---|---|
+| 默认 | 60630 | 基线 |
+| `--log-level warn`（CLI flag） | **0** | ✅ **有效**（此前记「无效」是不准确的） |
+| `OPENCLAW_LOG_LEVEL=warn`（环境变量） | 0 | ✅ **有效** |
+
+> 环境变量的价值不在于「比 flag 强」，而在于**它能作用于非 CLI 的进程**
+> —— 也就是 agent session 启动、systemd 单元这些真正产生噪音的地方。
+> flag 只在显式带 flag 的那一次调用里有效。
+
+### ⚠️ 绝对不能改 `openclaw.json` 的 `logging` 段
+
+那是 `Maximum call stack size` 的元凶：
+`loadConfig` → `readLoggingConfig` → `resolveSettings` → `getLogger` → `loadConfig` 无限递归。
+2026-10-26 当天因此产生 **342 次** `Failed to read config` 报错。
+
+**只用环境变量。** 已配好的位置：
+- `openclaw-gateway.service` / `openclaw-quick-health.service`（systemd `Environment=`）
+- `scripts/healthcheck.sh` 顶部 `export`
+- `scripts/check_cron_delivery.py` / `scripts/quick_health.py` 的 `subprocess` env
+
+### 顺带记的日志坑
+
+- **OpenClaw 日志轮转按大小不按天** → 同一槽位跨天追加 → `mtime` 判龄永远失效，
+  唯一可靠信号是**文件名里的槽位日期**。详见 `scripts/log_cleanup.sh` 头部注释。
+- **当前活跃槽位永不删/压缩**，只做超限截断（>50MB 保留最后 2000 行）。
+  26M < 50MB → 当天不会被处理，会一直涨。
+- **查日志大小时先按来源分类统计**（`{"subsystem":...}` / 消息归一化 + 计数），
+  不要凭印象猜谁在刷屏。
+- 查 systemd 日志**别只按 unit 名过滤** —— 实例化 unit 名（`xxx@yyy.service`）
+  会导致 `journalctl -u` 返回 No entries，明明发生了却查不到。**全量 grep 才准**。

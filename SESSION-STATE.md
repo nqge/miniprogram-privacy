@@ -822,7 +822,7 @@
    投递 delivered=True ✅
 **教训**: 「有 fallback」≠「有兜底」—— 同一账号的多个模型是同一张彩票的不同号码；
    结构性弱点不会自己坏，只在最坏时刻显形，那时已无补救窗口
-**巡检现状**: 13 组断言（A-M），PASS=43 FAIL=3 WARN=1
+**巡检现状（快照）**: 13 组断言（A-M），PASS=43 FAIL=3 WARN=1
 **残留项**: 1 PAT 吊销（需牛哥哥本人）· 1 第二 provider key（需牛哥哥提供）· 5 博客方向
 
 ### 2026-10-26 21:30 心跳 — 验证【M】在真无人值守下会告警
@@ -837,5 +837,29 @@
    触发的，而 OnUnitActiveSec 从服务上次启动起算 → 每次手动触发推后 30 分钟。
    19:11/19:42/20:13 真实间隔正好 30 分钟，timer 本身没问题
 **教训**: 取证要选对工具（查不到 ≠ 不存在）；手动触发会改变被测对象的行为
-**巡检现状**: 13 组断言（A-M），PASS=43 FAIL=3 WARN=1
+**巡检现状（快照）**: 13 组断言（A-M），PASS=43 FAIL=3 WARN=1
+**残留项**: 1 PAT 吊销（需牛哥哥本人）· 1 第二 provider key（需牛哥哥提供）· 5 博客方向
+
+### 2026-10-26 22:00 心跳 — 日志降噪（插件注册噪音占 87%）
+**起因**: /tmp/openclaw 一天涨到 26M（早上清完 2.5M）。当前活跃槽位永不删/压缩，
+  且 26M < 50MB 阈值 → **今天一整天都不会被处理**。查因（分类统计 27676 行）：
+  **24158 行 (87%) 是插件注册噪音** —— 每次 CLI 调用重新注册全部插件，INFO 打 6+ 行。
+**实测三种旋钮**（3 次 `openclaw cron list` 字节增量）:
+  默认 27008/次 → `--log-level warn` 5735/次（**无效**）→ `OPENCLAW_LOG_LEVEL=warn` 5735/次（**-79%** ✅）
+**⚠️ 21:35 复核更正（上面的旋钮结论和归因都需要修正）**:
+  - 「`--log-level warn` 无效」= **不准确**。裸环境下实测：默认 60630/3次 →
+    带 `--log-level warn` = **0 字节**。flag 确实有效，只是当时的环境变量已经把它盖住了
+  - 「每次 CLI 调用重新注册全部插件」= **不成立**。实测 `openclaw cron list` × 5 → **0 行**；
+    真实来源是 **agent session 启动**（同一秒成簇 16 行）
+  - 降噪的正确落点因此是**拉起 session 的进程环境**（gateway 单元 Environment=），
+    这也正是已经配好的地方
+**已做**: gateway.service + quick-health.service 加 `Environment=OPENCLAW_LOG_LEVEL=warn`；
+  healthcheck.sh 顶部 export；check_cron_delivery.py / quick_health.py 子进程 env
+  （均已备份/语法校验/daemon-reload/重启 gateway）
+**验证**: 最后 300 行日志插件注册行数 = **0** ✅；3 次 CLI 增量 17205 字节 = 5735/次 ✅
+**⚠️ 约束**: **不能改 openclaw.json 的 logging 段** —— 那是今天 342 次
+  `Failed to read config ... Maximum call stack size` 的根因
+  （loadConfig → readLoggingConfig → resolveSettings → getLogger → loadConfig 无限递归）。
+  **只能用环境变量。**
+**巡检现状（快照）**: 13 组断言（A-M），PASS=43 FAIL=3 WARN=1
 **残留项**: 1 PAT 吊销（需牛哥哥本人）· 1 第二 provider key（需牛哥哥提供）· 5 博客方向
