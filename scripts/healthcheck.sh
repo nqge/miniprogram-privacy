@@ -97,6 +97,19 @@ else
   bad "quick-health 的 OnFailure 指令丢失或指向异常 — 故障时不会告警（$qof）"
 fi
 
+# 完整的 systemd 配置漂移检查（单元 enabled / 脚本存在 / 关键指令生效 / 定时器调度）
+# 覆盖「配置文件里的东西 ≠ 实际生效的东西」这一整类风险
+drift_out=$(python3 /root/.openclaw/workspace/scripts/check_unit_drift.py 2>/dev/null)
+drift_rc=$?
+drift_pass=$(echo "$drift_out" | grep -c '✅')
+drift_fail=$(echo "$drift_out" | grep -c '❌')
+if [ "$drift_fail" -gt 0 ]; then
+  bad "systemd 配置漂移：$drift_fail 项异常（详见 scripts/check_unit_drift.py）"
+  echo "$drift_out" | grep '❌' | sed 's/^/        /'
+else
+  ok "systemd 配置无漂移（$drift_pass 项全部通过）"
+fi
+
 # ── C. 记忆索引 ───────────────────────────────────
 echo ""
 echo "【C】记忆索引"

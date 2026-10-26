@@ -211,6 +211,29 @@ def _check_unit_integrity():
     ok(f"OnFailure → {val}")
 
 
+def _check_unit_drift():
+    """systemd 配置漂移检查 —— 验证「指令真的生效」，不是「文件里写了」。
+
+    2026-10-26 的教训：重写 .service 时把 OnFailure 真实指令弄丢了，
+    但注释里还留着那行文字 → grep 看着正常，实际告警链路已断。
+    """
+    print("【systemd 配置漂移】")
+    r = subprocess.run(
+        ["/usr/bin/python3", f"{WS}/scripts/check_unit_drift.py"],
+        capture_output=True, text=True, timeout=90,
+    )
+    for ln in (r.stdout or "").split("\n"):
+        ln = ln.strip()
+        if not ln or ln.startswith("【") or ln.startswith("结果") or ln.startswith("═") or ln.startswith("   - "):
+            continue
+        if "❌" in ln:
+            bad(ln.replace("❌ FAIL", "").strip())
+        else:
+            print(f"  {ln}")
+    if r.returncode != 0:
+        bad("systemd 单元存在配置漂移（详见上方）")
+
+
 def _persist_log():
     """把结果追加到 logs/quick-health.log —— journald 会轮转，日志文件能保留历史。
 
@@ -242,6 +265,7 @@ def main():
     check_provider_health()
     check_cron_delivery()
     _check_unit_integrity()
+    _check_unit_drift()
     print("════════════════════════════════════════════")
     print(f" 结果: PASS={PASSED}  FAIL={len(FAILED)}")
     if FAILED:
