@@ -38,14 +38,26 @@ def main() -> int:
     )
     try:
         lines = STATE.read_text(encoding="utf-8").split("\n")
-        done = False
+        live_idx = None
         for i, ln in enumerate(lines):
-            if ln.startswith("**巡检现状**:"):
-                lines[i] = newline
-                done = True
+            if ln.startswith("**巡检现状**:") and "每日 07:00 自动运行" in ln:
+                live_idx = i
                 break
-        if not done:
+        if live_idx is None:
+            # 没有「活」的行了 —— 找第一处并改造成活行
+            for i, ln in enumerate(lines):
+                if ln.startswith("**巡检现状**:"):
+                    lines[i] = newline
+                    live_idx = i
+                    break
+        if live_idx is None:
             lines.insert(3, newline)
+        else:
+            lines[live_idx] = newline
+        # 历史条目里若还残留同名前缀的行，改成「快照」形式，避免看起来是活的
+        for i, ln in enumerate(lines):
+            if i != live_idx and ln.startswith("**巡检现状**:"):
+                lines[i] = ln.replace("**巡检现状**:", "**巡检现状（快照）**:", 1)
         STATE.write_text("\n".join(lines), encoding="utf-8")
         print(f"[state-status] 已更新：{newline}")
     except Exception as e:
