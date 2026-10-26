@@ -35,6 +35,28 @@ HEADERS = {
     "User-Agent": "openclaw-teahouse-monitor",
 }
 
+# 认证请求：匿名额度只有 60 次/小时/IP，认证后是 5000 次/小时。
+# 2026-10-26 实测踩到：匿名额度耗尽 → API 返回 403 rate limit exceeded
+# → 茶馆监控拉不到新讨论（而且报错信息不像「限流」，很难一眼看出）。
+# Token 从 gh CLI 的配置里读（gh auth status 已确认账号 nqge 有效）。
+def _github_token():
+    """从 gh CLI 配置里读 token；读不到就退回匿名（额度小但能用）。"""
+    import re
+    for pth in ("/root/.config/gh/hosts.yml",):
+        try:
+            txt = Path(pth).read_text(encoding="utf-8")
+        except Exception:
+            continue
+        m = re.search(r"oauth_token:\s*(\S+)", txt)
+        if m:
+            return m.group(1)
+    return None
+
+
+_GH_TOKEN = _github_token()
+if _GH_TOKEN:
+    HEADERS["Authorization"] = f"Bearer {_GH_TOKEN}"
+
 
 def _get(url, timeout=90, retries=3):
     last = None

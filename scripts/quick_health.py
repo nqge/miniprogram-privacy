@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import urllib.request
+from pathlib import Path
 
 WS = "/root/.openclaw/workspace"
 FAILED = []
@@ -81,13 +82,36 @@ def check_external_apis():
     except Exception as e:
         bad(f"飞书 API 不可用（{type(e).__name__}）")
 
-    # GitHub（茶馆监控依赖）
+    # GitHub（茶馆监控依赖）—— 用认证请求，匿名额度只有 60 次/小时/IP
+    gh_headers = {"User-Agent": "openclaw-healthcheck", "Accept": "application/vnd.github+json"}
+    tok = None
     try:
-        with urllib.request.urlopen(
-            "https://api.github.com/repos/ythx-101/openclaw-qa/issues", timeout=12
-        ) as r:
-            r.read(1)
-        ok("GitHub API 可达")
+        import re as _re
+        _t = Path("/root/.config/gh/hosts.yml").read_text(encoding="utf-8")
+        _m = _re.search(r"oauth_token:\s*(\S+)", _t)
+        if _m:
+            tok = _m.group(1)
+            gh_headers["Authorization"] = f"Bearer {tok}"
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/rate_limit", headers=gh_headers
+        )
+        with urllib.request.urlopen(req, timeout=12) as r:
+            d = json.loads(r.read().decode())
+        core = (d.get("resources") or {}).get("core") or {}
+        remaining, limit = core.get("remaining"), core.get("limit")
+        if limit and remaining is not None and remaining < 5:
+            bad(f"GitHub API 额度将耗尽（{remaining}/{limit}）— 茶馆监控可能拉不到新讨论")
+        else:
+            ok(f"GitHub API 可用（额度 {remaining}/{limit}）")
+    except urllib.error.HTTPError as e:
+        # 403 rate limit ≠ 不可达 —— 要说清楚是限流
+        if e.code == 403:
+            bad("GitHub API 被限流（403 rate limit）— 茶馆监控会拉不到新讨论")
+        else:
+            bad(f"GitHub API 异常（HTTP {e.code}）")
     except Exception as e:
         bad(f"GitHub API 不可达 — 茶馆监控会失败（{type(e).__name__}）")
 
