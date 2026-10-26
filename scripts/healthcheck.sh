@@ -475,6 +475,49 @@ else:
                 pass
         if not found:
             still.append(p)
+    # 2026-10-27（E30）：pending 里的条目如果**已经**出现在某篇笔记里，
+    # 说明「已经蒸馏但没人把它移出队列」—— 这正是 E30 的 bug 状态，
+    # 而原来的检查**只报 PASS、不做清理** → bug 会一直复发。
+    #
+    # 现在**自愈**：把这些条目移出 pending 并记入 distilled，
+    # 让「出队」不再依赖 agent 记得跑 --mark-distilled。
+    #
+    # ⚠️ 方向别搞反（我第一版写反了）：
+    #   still = **没**出现在笔记里的（= 真未蒸馏）
+    #   healed = **已**出现在笔记里的（= 已蒸馏但没出队）
+    if pending:
+        notes_txt = ""
+        for f in notes:
+            try:
+                notes_txt += open(f, encoding='utf-8', errors='replace').read()
+            except Exception:
+                pass
+        healed_items = [p for p in pending if f"#{p.get('number')}" in notes_txt]
+        if healed_items:
+            try:
+                data = json.load(open(todo, encoding='utf-8'))
+                dist = list(data.get('distilled', []))
+                known = {d.get('number') for d in dist}
+                for p in healed_items:
+                    if p.get('number') in known:
+                        continue
+                    dist.append({
+                        "number": p.get("number"),
+                        "title": (p.get("title") or "")[:100],
+                        "comments": p.get("comments", 0),
+                        "distilled_at": __import__("datetime").datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                        "healed_by": "healthcheck",
+                    })
+                data["distilled"] = dist[-50:]
+                healed_nums = {p.get('number') for p in healed_items}
+                data["pending"] = [p for p in data.get("pending", [])
+                                   if p.get('number') not in healed_nums]
+                json.dump(data, open(todo, 'w', encoding='utf-8'),
+                          ensure_ascii=False, indent=2)
+                print(f"PASS 茶馆自愈：{len(healed_nums)} 条已蒸馏但未出队 → 已移入 distilled {sorted(healed_nums)}")
+            except Exception as e:
+                print(f"WARN 茶馆自愈失败（{type(e).__name__}）")
+
     if still:
         print(f"FAIL 茶馆有 {len(still)} 条讨论未蒸馏（原始 dump 已落盘但未提炼成知识）")
         failed = 1
@@ -483,15 +526,19 @@ else:
         # 每 4 小时运行都把同样 4 条当成「待处理」重新蒸馏一遍（反刍）。
         # 现在蒸馏完的条目会移到 distilled 列表，所以这里也检查两个列表是否自洽：
         #   pending 与 distilled 不应有交集（同一议题不能既待处理又已蒸馏）
+        #
+        # ⚠️ 必须**重新读盘**：上面自愈可能刚改过这个文件，
+        #    继续用内存里的旧 pending 会报出「刚自愈完又说矛盾」的假 FAIL。
         try:
             data = json.load(open(todo, encoding='utf-8'))
             dist = {d.get('number') for d in data.get('distilled', [])}
-            overlap = {p.get('number') for p in pending} & dist
+            cur_pending = {p.get('number') for p in data.get('pending', [])}
+            overlap = cur_pending & dist
             if overlap:
                 print(f"FAIL 茶馆待蒸馏队列自相矛盾：{sorted(overlap)} 既在 pending 又在 distilled")
                 failed = 1
             else:
-                print(f"PASS 茶馆内容已全部蒸馏（pending 0 条，distilled {len(dist)} 条）")
+                print(f"PASS 茶馆内容已全部蒸馏（pending {len(cur_pending)} 条，distilled {len(dist)} 条）")
         except Exception:
             print("PASS 茶馆内容已全部蒸馏")
 print(f"__DISTILL_FAILED__={failed}")
