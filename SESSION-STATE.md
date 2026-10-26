@@ -304,3 +304,13 @@
        → `cron edit --channel feishu --to <open_id>` → 测试消息 code:0 → 手动触发验证 delivered=True
 **教训**: 「status=ok」≠「用户收到了」；与记忆检索同类错误，必须验证端到端
 **残留项**: 4 项（见 `待决策选项单.md`），第 1 项吊销 PAT 建议尽快
+
+### 2026-10-26 10:10 心跳 — 学习频率自愈 + 失效 provider 清理
+**1. 学习笔记缺口**: 4/8 天无笔记。查 cron runs → 零次触发（非失败）→ 改每日 `0 9 * * *` + 任务加自愈断言
+   → 实跑补回 10-24/10-25 → delivered=True
+**2. 失效 provider**: 用正确 anthropic-messages 协议实测（此前 OpenAI 格式测出 glmcode「OK」是假象）
+   → arkcode 7 模型全 404 / glmcode 401 / kimicode 404+订阅失效 → 全部删除（fallback 本就在 minimax 内）
+   → models list 只剩 3 个 minimax，doctor Errors: 0，备份 openclaw.json.bak-20261026-0935
+**3. 索引**: 补记写完后索引落后 → 补跑 → 11/11 files · 96 chunks
+**教训**: 「失败」≠「没触发」，前者修任务后者修调度；测 provider 必须用对协议
+**残留项**: 第 1 项吊销 PAT（建议尽快）+ 第 5 项博客（不急）
