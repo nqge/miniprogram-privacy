@@ -566,6 +566,91 @@ PASS=$((PASS + 1))
 
 # ── L. 连续性入口新鲜度 ───────────────────────────
 echo ""
+echo "【N】记忆库体积与索引均衡"
+
+# 2026-10-26 实测：一天 15 小时高强度工作让 memory/2026-10-26.md 涨到 106KB /
+# 1875 行 → 单独占掉 215 个索引块里的 100 块（46%）。
+#
+# ⚠️ 判据设计的教训（第一版用 25% 做 FAIL 阈值 → **假警报**）：
+# 我以为「单文件占块数高 = 有问题」，但实测发现那个文件里是**真实操作知识**
+# （检索「日志清理脚本形同虚设」命中 0.8963，4 块全在笔记里）——
+# 一个忙碌的日子**合法地**就该占 30-40%。
+# 真正的问题不是「占比高」，而是：
+#   1) memory/ 目录**没有任何体积上限**（对比：/tmp/openclaw 日志有 50MB/200MB 上限）
+#      → 单个文件可以无限涨，最终把整个索引淹掉
+#   2) 占比高到**真的开始挤掉别的文件**（检索被单文件垄断）
+#
+# 所以判据改成：
+#   单文件 > 300KB              → FAIL（超过「一篇笔记」的合理规模）
+#   单文件占索引块 > 60%        → FAIL（开始垄断检索）
+#   memory/ 目录 > 200MB        → WARN（索引会持续变大，该归档旧笔记）
+# 25% 那个阈值是**假警报** —— 已废弃。
+
+mem_report=$(python3 - << 'PY3' 2>/dev/null
+import os, sqlite3
+MEM_DIR = '/root/.openclaw/memory'
+DB = '/root/.openclaw/memory/main.sqlite'
+MAX_FILE_KB = 300
+MAX_SHARE_PCT = 60
+MAX_DIR_MB = 200
+
+# 1) 索引块分布（只有真「垄断」才 FAIL）
+try:
+    db = sqlite3.connect(DB)
+    rows = db.execute("select path, count(*) c from chunks group by path").fetchall()
+    total = sum(c for _, c in rows)
+except Exception as e:
+    print(f"FAIL 读不到索引（{type(e).__name__}）")
+    raise SystemExit(1)
+
+if rows and total:
+    worst_path, worst_c = max(rows, key=lambda r: r[1])
+    share = worst_c * 100 // max(total, 1)
+    if share > MAX_SHARE_PCT:
+        print(f"FAIL 单个文件垄断索引 {share}%（{worst_c}/{total} 块）→ {worst_path}"
+              f" —— 会挤掉其他文件，需拆分或归档")
+    else:
+        print(f"PASS 索引块分布正常（最大占比 {share}%：{worst_path}）")
+
+# 2) 单文件体积（真正的硬上限）
+big = []
+for name in os.listdir(MEM_DIR):
+    p = os.path.join(MEM_DIR, name)
+    if os.path.isfile(p) and name.endswith('.md'):
+        kb = os.path.getsize(p) // 1024
+        if kb > MAX_FILE_KB:
+            big.append(f"{name} ({kb}KB)")
+if big:
+    print(f"FAIL 单个记忆文件超过 {MAX_FILE_KB}KB：{', '.join(big)}"
+          f" —— 应拆分或归档（摘录留在独立文件，笔记只留结论+指针）")
+else:
+    print(f"PASS 记忆文件体积均在 {MAX_FILE_KB}KB 以内")
+
+# 3) 目录总量
+total_mb = 0
+for root, _, files in os.walk(MEM_DIR):
+    for f in files:
+        try:
+            total_mb += os.path.getsize(os.path.join(root, f))
+        except OSError:
+            pass
+total_mb //= 1024 * 1024
+if total_mb > MAX_DIR_MB:
+    print(f"WARN memory/ 目录已达 {total_mb}MB —— 索引会持续变大，该考虑归档旧笔记")
+else:
+    print(f"PASS memory/ 目录 {total_mb}MB（上限 {MAX_DIR_MB}MB）")
+PY3
+)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+    *) [ -n "$line" ] && echo "  $line" ;;
+  esac
+done <<< "$mem_report"
+PASS=$((PASS + 1))
+
 echo "【L】连续性入口新鲜度"
 
 cont_report=$(python3 - << 'PY' 2>/dev/null
