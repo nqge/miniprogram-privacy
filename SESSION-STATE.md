@@ -403,3 +403,14 @@
 **顺带确认**: src-recon / ai-daily-newsletter 在主仓库 .gitignore 内（各自管 remote），
    miniprogram-privacy-checker 被主仓库镜像为普通文件 —— 策略正确，不是 bug
 **残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客
+
+### 2026-10-26 11:30 心跳 — 巡检新增【H】端到端功能实测
+**缺口**: 巡检 7 组里没有一组真的跑过功能 —— 【C】查 `Embeddings: ready`（本身就是状态字段）、
+   【A】只查 token 可获取。巡检犯了今天总结的同一个错
+**已做**: 【H】H1 真跑一次记忆检索并校验**命中内容正确**（MEMORY.md + 含「称呼」）；
+   H2 走飞书 token+消息接口真实链路（只读 chats 接口，不打扰用户）
+**灵敏度验证**: 停 embed-proxy → 【C】报 Embeddings unavailable、【H】报执行异常 → 两层都抓到
+**修了自己一个 bug**: 解析 JSON 时 stdin 读了两次 → H1 误报「执行异常」
+   （第 4 次「巡检自己坏了」的教训）
+**当前**: PASS=29 FAIL=2 WARN=1
+**残留项**: 第 1 项 PAT 吊销（需牛哥哥本人）+ 第 5 项博客

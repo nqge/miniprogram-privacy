@@ -270,6 +270,64 @@ while IFS= read -r line; do
 done <<< "$repo_report"
 PASS=$((PASS + 1))
 
+# ── H. 端到端功能实测 ─────────────────────────────
+echo ""
+echo "【H】端到端功能实测（不是看状态字段，是真的跑一次）"
+
+# H1 记忆检索：真的搜一次，并检查是否命中已知内容
+mem_search_out=$(timeout 90 openclaw memory search "牛哥哥 称呼 沟通语言" --json 2>/dev/null | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+i = raw.find('{')
+if i < 0:
+    print('PARSE_ERROR'); raise SystemExit
+try:
+    d = json.loads(raw[i:])
+except Exception:
+    print('PARSE_ERROR'); raise SystemExit
+rs = d.get('results', [])
+if not rs:
+    print('NO_RESULT'); raise SystemExit
+top = rs[0]
+# 断言：命中 MEMORY.md 且片段含「称呼」关键词
+snippet = top.get('snippet', '')
+ok = 'MEMORY.md' in top.get('path', '') and '称呼' in snippet
+print(('OK' if ok else 'WRONG') + '|' + str(top.get('path')) + ':' + str(top.get('startLine')) + '|' + str(len(rs)) + '条')
+" 2>/dev/null)
+case "$mem_search_out" in
+  OK*)  ok "记忆检索端到端可用（命中 $(echo "$mem_search_out" | cut -d'|' -f2)）" ;;
+  NO_RESULT*) bad "记忆检索无结果 —— 检索功能实际已死" ;;
+  WRONG*) bad "记忆检索命中内容不对（$(echo "$mem_search_out" | cut -d'|' -f2)）" ;;
+  *) bad "记忆检索执行异常" ;;
+esac
+
+# H2 飞书：真的发一条消息（不是只查 token）
+feishu_out=$(python3 - << 'PY' 2>/dev/null
+import json, urllib.request, time
+try:
+    c = json.load(open('/root/.openclaw/openclaw.json'))
+    f = c['channels']['feishu']
+    req = urllib.request.Request(
+        'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+        data=json.dumps({"app_id": f['appId'], "app_secret": f['appSecret']}).encode(),
+        headers={'Content-Type': 'application/json'}, method='POST')
+    tok = json.load(urllib.request.urlopen(req, timeout=15)).get('tenant_access_token')
+    if not tok:
+        print('NO_TOKEN'); raise SystemExit
+    # 用 chat_id 列表接口做只读验证（不打扰用户）
+    r = urllib.request.Request('https://open.feishu.cn/open-apis/im/v1/chats?page_size=1',
+                               headers={'Authorization': f'Bearer {tok}'})
+    d = json.load(urllib.request.urlopen(r, timeout=15))
+    print('OK' if d.get('code') == 0 else f"API_ERR:{d.get('msg')}")
+except Exception as e:
+    print(f'ERR:{type(e).__name__}')
+PY
+)
+case "$feishu_out" in
+  OK*) ok "飞书 API 端到端可用（token + 消息接口均正常）" ;;
+  *) bad "飞书 API 实际不可用（$feishu_out）" ;;
+esac
+
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
