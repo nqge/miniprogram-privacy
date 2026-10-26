@@ -1,6 +1,6 @@
 # SESSION-STATE.md
 
-**最后更新**: 2026-10-26 12:00
+**最后更新**: 2026-10-27 03:59
 **状态**: ✅ 全系统已修复并实证（每日自动巡检，见下方「巡检现状」）。glmcode/arkcode/kimicode 三个失效 provider 已删除（不再是待决策项）。
 
 > ## 📌 2026-10-26 这一天的核心（下次会话先读这段）
@@ -31,28 +31,23 @@
 
 ---
 
+<!-- BEGIN:gen_system_status -->
 ## 📋 系统状态
 
-- ✅ `daily-learning`: **已修复** — 模型改 `minimax/MiniMax-M3` + `--best-effort-deliver`，手动实跑 2 次均 `status: ok`；周频（周一 09:00），**首次自动调度验证待 10-26**
-- ✅ `daily-reflection`: **已修复** — 同上配置，手动实跑 `status: ok`（39 次失败后首次成功）；周频（周日 22:00），**首次自动调度验证待 10-25**
-- ✅ 频率周频：周一 09:00 学习 / 周日 22:00 反思
-- ❌ `teahouse-check` (2 份)、`dream-cycle-v3`: enabled=false（4 月起就被 LLM 1305 报错）
-- 🔴 `glmcode` provider API key 过期（全部模型 401）→ **需用户重新申请**
-- 🔴 `arkcode` provider CodingPlan 过期（InvalidSubscription）→ **需用户续费或放弃**
-- ⚠️ plugins.entries.qqbot + ddingtalk: 仍残留 stale config entry（每次启动刷噪音）
-- ⚠️ 8am/9am `.pending_notify_*.txt` 机制已停用（2026-04-01 后无文件）
+> ⚠️ 本节由 `scripts/gen_system_status.py` 从**真实系统**生成 —— 不要手改。
+> 改配置后重跑 `python3 scripts/gen_system_status.py --update`。
 
-### 2026-10-21 cron 故障根因（详见 memory/2026-10-21.md）
-三层症状同为 `status: error`，解法完全不同：
-1. **鉴权层** — `glmcode` key 过期，全部模型 401
-2. **备选层** — `arkcode` 订阅过期，两个 coding provider 同时失效
-3. **投递层** — `announce` + `channel=last` 在 isolated 会话无 chat 可投 → 400
+**providers**: minimax
 
-**关键教训**：前 79 次运行**工作其实一直成功**（产出 855 token 完整笔记），只是投递失败被误判为任务失败。
-若按"error 就换模型"的直觉处理，会白白重配。排障第一步是确认故障发生在哪一层。
-排障完成后必须 `cron run` 实跑验证，不能只看配置。
+**cron 任务**:
+- `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (207s)
+- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (163s)
+- `daily-learning` — cron 0 9 * * * · timeout 420s · last: ok (362s)
+- `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (47s)
+- `daily-reflection` — cron 0 22 * * 0 · timeout 420s · last: ok (30s)
 
----
+**plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw
+<!-- END:gen_system_status -->
 
 ## 📝 心跳记录
 
@@ -362,7 +357,7 @@
 **2. 博客项事实核查**: 最后 push 2026-03-11（停更7个月），**0 star 0 fork 0 issue**，
    本地无克隆；src-recon 有大量可转素材。建议 B（归档）或 C（只做技术沉淀进 docs/）
 **3. 选项单收敛**: 已完成清单 6→13 条；现在只剩 2 项需牛哥哥决定
-**巡检现状**: 12 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=55 FAIL=7 WARN=1
+**巡检现状**: 12 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=57 FAIL=4 WARN=1
 
 ### 2026-10-26 11:15 心跳 — 学习笔记失控膨胀修复
 **问题**: 今日笔记有 6 个学习小节 + 2 个反思小节，单节最长 3365 字（规定 100-200 字），总量 ~9500 字
@@ -979,3 +974,17 @@
 3. timeoutSeconds 300 → 600（第二道防线）
 **验证**: 修复前 300/600/600 三次超时 → 修复后 **47.2s 成功** ✅；【R】FAIL → PASS ✅
 **新增**: E35 入库，L1 35 条，35/35 可检索
+
+### 2026-10-27 05:40 心跳 — 连续性入口的当前状态过期（E36）
+**起因**: SESSION-STATE.md 头部「📋 系统状态」小节几乎每条都过期
+   （已删的 glmcode/arkcode provider、已删的 teahouse-check/dream-cycle-v3 cron、
+   已移除的 qqbot/ddingtalk plugin、早过期的「待 10-26 验证」）
+**为什么严重**: 它是「每次会话先读」的第一份文件 → 下一个会话会被直接误导，
+   去等那些早已不需要等的决策项。**过期数据不可怕，过期的指令可怕**
+**已做**:
+1. 新增 scripts/gen_system_status.py —— 系统状态小节从真实系统生成
+   （providers/cron/plugins 实时读 + BEGIN/END 标记），头部时间用 git 自动填
+2. 新增【S】断言（18 → 19 组）：providers/cron 列表核对 + 已删除实体残留检查
+3. 历史快照记录不动（那是当时的事实）
+**验证**: 注入 glmcode/arkcode/teahouse-check → 四条 FAIL 同时报出 ✅；恢复 → PASS ✅
+**新增**: E36 入库，L1 36 条，36/36 可检索

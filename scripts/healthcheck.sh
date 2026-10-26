@@ -739,6 +739,95 @@ while IFS= read -r line; do
 done <<< "$mem_report"
 PASS=$((PASS + 1))
 
+echo "【S】连续性入口的「当前状态」是否过期"
+
+# 2026-10-27 05:15 补：SESSION-STATE.md 头部的「📋 系统状态」小节是**手写的**，
+# 里面有大量过期内容：已删除的 provider（glmcode/arkcode/kimicode）、
+# 已删除的 cron（teahouse-check/dream-cycle-v3）、已移除的 plugin（qqbot/ddingtalk）、
+# 「首次自动调度验证待 10-26」这种早就过期的待办。
+#
+# 而 SESSION-STATE.md 的头部是**下一个会话最先读的地方** —— 它过期 = 下一个会话被误导。
+# 这比 L1 库里的过期计数更严重：那是数据，这是**指令**。
+#
+# 现在「系统状态」由 scripts/gen_system_status.py 从真实系统生成。
+# 这里核对：**声明的内容与真实系统是否一致**。
+
+st_report=$(python3 - << 'PY6' 2>/dev/null
+import json, os, re, subprocess
+WS = '/root/.openclaw/workspace'
+STATE = f'{WS}/SESSION-STATE.md'
+failed = 0
+
+try:
+    txt = open(STATE, encoding='utf-8').read()
+except Exception as e:
+    print(f"FAIL 读不到 SESSION-STATE.md（{type(e).__name__}）")
+    raise SystemExit(1)
+
+# 取「系统状态」小节（含生成标记的那段）
+m = re.search(r'<!-- BEGIN:gen_system_status -->(.*?)<!-- END:gen_system_status -->',
+              txt, re.S)
+if not m:
+    print("FAIL SESSION-STATE.md 的系统状态小节没有生成标记 —— "
+          "跑 `python3 scripts/gen_system_status.py --update`")
+    raise SystemExit(1)
+sec = m.group(1)
+
+problems = []
+
+# 1) providers 与真实配置一致
+try:
+    c = json.load(open('/root/.openclaw/openclaw.json', encoding='utf-8'))
+    real = set(c['models']['providers'].keys())
+    mm = re.search(r'\*\*providers\*\*: ([^\n]+)', sec)
+    if mm:
+        decl = {x.strip() for x in mm.group(1).split(',')}
+        if decl != real:
+            problems.append(f"providers 声明 {sorted(decl)}，实际 {sorted(real)}")
+except Exception:
+    pass
+
+# 2) cron 任务列表与真实一致
+try:
+    r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
+                       capture_output=True, text=True, timeout=60)
+    jobs, _ = json.JSONDecoder().raw_decode(r.stdout[r.stdout.find('['):])
+    real_names = {j['name'] for j in jobs}
+    decl_names = set(re.findall(r'^- `([a-z0-9-]+)` —', sec, re.M))
+    missing = real_names - decl_names
+    extra = decl_names - real_names
+    if missing:
+        problems.append(f"漏了 cron 任务 {sorted(missing)}")
+    if extra:
+        problems.append(f"列了不存在的 cron 任务 {sorted(extra)}")
+except Exception:
+    pass
+
+# 3) 不该再有已删除实体的残留提及
+for gone in ('glmcode', 'arkcode', 'kimicode', 'teahouse-check', 'dream-cycle-v3',
+             'qqbot', 'ddingtalk'):
+    if gone in sec:
+        problems.append(f"系统状态小节里还有已删除的「{gone}」")
+
+if problems:
+    for p in problems:
+        print(f"FAIL {p}")
+    failed = 1
+else:
+    print("PASS 连续性入口的当前状态与真实系统一致")
+print(f"__ST_FAILED__={failed}")
+PY6
+)
+st_fail=$(echo "$st_report" | grep -oP '__ST_FAILED__=\K[0-9]+')
+st_fail=${st_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$st_report"
+PASS=$((PASS + 1))
+
 echo "【R】cron 任务「脚本耗时 vs 超时」对比（防把等待慢当成任务慢）"
 
 # 2026-10-27 04:40 补（E35）：
