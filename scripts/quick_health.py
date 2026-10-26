@@ -186,6 +186,27 @@ def check_provider_health():
         bad("provider 检查未通过（详见上方）")
 
 
+def _persist_log():
+    """把结果追加到 logs/quick-health.log —— journald 会轮转，日志文件能保留历史。
+
+    为什么重要：排障时最需要的信息是「这个故障持续了多久」，
+    而 journald 只保留有限窗口，看不出持续性。
+    """
+    import datetime
+    log_dir = f"{WS}/logs"
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        status = "FAIL" if FAILED else "PASS"
+        with open(f"{log_dir}/quick-health.log", "a", encoding="utf-8") as f:
+            f.write(f"{stamp}  {status}  PASS={PASSED} FAIL={len(FAILED)}")
+            if FAILED:
+                f.write("  | " + "; ".join(FAILED)[:300])
+            f.write("\n")
+    except Exception as e:
+        print(f"[log] 写入失败（忽略）: {type(e).__name__}")
+
+
 def main():
     print("════════════════════════════════════════════")
     print(" 快速健康子集  " + __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -202,6 +223,7 @@ def main():
             print(f"   - {f}")
         print(" 提示：完整巡检请跑 scripts/healthcheck.sh")
     print("════════════════════════════════════════════")
+    _persist_log()
     return 1 if FAILED else 0
 
 
