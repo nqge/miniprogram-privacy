@@ -105,6 +105,25 @@ def mk_session(d, name, polls, when_iso, marker=None, ensure_ascii=True,
 
     rule_text: 首条 user message 里带上规则原文 → 模拟「看得到规则」
     user_text: 首条 user message 的正文
+
+    ⚠️ offset_sec 是**相对会话启动时间**的秒数。
+      如果会话启动时间离 now 超过 12 小时窗口，
+      那么「靠 offset 相对偏移」造出来的 poll 一定落在窗口外 →
+      判据会返回 0（这个用例就退化成了「窗口外」）。
+      需要「会话很老、但 poll 发生在窗口内」时，
+      请用 **abs_polls**（绝对时间戳），别靠 offset 硬凑。
+    """
+    return mk_session_abs(d, name, polls, when_iso, marker=marker,
+                          ensure_ascii=ensure_ascii, rule_text=rule_text,
+                          user_text=user_text, abs_polls=None)
+
+
+def mk_session_abs(d, name, polls, when_iso, marker=None, ensure_ascii=True,
+                   rule_text=None, user_text=None, abs_polls=None):
+    """同 mk_session，但额外支持 abs_polls = [(timeout_ms, abs_ts), ...]。
+
+    abs_polls 里的时间戳是**绝对 epoch 秒**，用来精确控制
+    「poll 发生在窗口内」而「会话启动在窗口外」。
     """
     os.makedirs(d, exist_ok=True)
     base_ts = datetime.datetime.fromisoformat(when_iso.replace('Z', '+00:00')).timestamp()
@@ -126,6 +145,15 @@ def mk_session(d, name, polls, when_iso, marker=None, ensure_ascii=True,
             "type": "message", "id": str(i), "timestamp": ts,
             "message": {"role": "assistant", "content": [{
                 "type": "toolCall", "id": f"c{i}", "name": "process",
+                "arguments": {"action": "poll", "sessionId": "x", "timeout": to}}]},
+        }, ensure_ascii=ensure_ascii))
+    for i, (to, abs_ts) in enumerate(abs_polls or []):
+        ts = datetime.datetime.fromtimestamp(
+            abs_ts, datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+        recs.append(json.dumps({
+            "type": "message", "id": f"a{i}", "timestamp": ts,
+            "message": {"role": "assistant", "content": [{
+                "type": "toolCall", "id": f"ac{i}", "name": "process",
                 "arguments": {"action": "poll", "sessionId": "x", "timeout": to}}]},
         }, ensure_ascii=ensure_ascii))
     with open(os.path.join(d, name + '.jsonl'), 'w') as fh:
@@ -220,7 +248,16 @@ def main():
         pre_iso = (pre_start - datetime.timedelta(minutes=5)).isoformat().replace('+00:00', 'Z')
         expect_pre = 1
     d = os.path.join(base, 's9')
-    mk_session(d, 'pre', [(180000, 1)], pre_iso)
+    # ⚠️ 2026-10-28 修正：这个 poll 的时间戳**不能**相对会话启动时间算。
+    # 规则写入时间距今可能已经**超过 12 小时窗口**（实测：21 小时），
+    # 那么「会话启动 + offset」无论 offset 取多大都落不进窗口
+    # （offset 太小 → 窗口外；offset 够大 → poll 跑到未来，
+    #   但会话启动时间也会跟着往后推，反而不再早于规则写入时间）。
+    # → 必须用**绝对时间戳**把 poll 放到窗口内（now - 60s），
+    #    而会话启动时间单独保持在规则写入时间之前。
+    now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    mk_session_abs(d, 'pre', [], pre_iso,
+                   abs_polls=[(180000, now_ts - 60)])
     r = run(d)
     cases.append((r, {'pre_rule': expect_pre, 'guilty': 0},
                   '规则生效前启动的会话 → 不算「无视规则」'))
