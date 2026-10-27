@@ -62,7 +62,8 @@ def parse_report(out):
     真身判据输出的是给人看的文本（WARN/PASS + 明细），
     单测要断言具体数字，所以这里把它解析回结构化。
     """
-    res = {'long_total': 0, 'poll_total': 0, 'detail': {}, 'verdict': 'PASS'}
+    res = {'long_total': 0, 'poll_total': 0, 'detail': {}, 'verdict': 'PASS',
+           'guilty': 0, 'pre_rule': 0, 'no_text': 0}
     for line in out.splitlines():
         line = line.strip()
         m = re.match(r'^WARN 最近 (\d+) 小时有 (\d+) 次长 poll', line)
@@ -85,17 +86,39 @@ def parse_report(out):
         m = re.search(r'其中 (\d+) 次来自', line)
         if m:
             res['unclassified'] = int(m.group(1))
+        # E49 的三段拆分
+        m = re.search(r'看得到规则却违规：\*{0,2}(\d+) 次', line)
+        if m:
+            res['guilty'] = int(m.group(1))
+        m = re.search(r'规则生效前启动：(\d+) 次', line)
+        if m:
+            res['pre_rule'] = int(m.group(1))
+        m = re.search(r'上下文未见规则原文：(\d+) 次', line)
+        if m:
+            res['no_text'] = int(m.group(1))
     return res
 
 
-def mk_session(d, name, polls, when_iso, marker=None, ensure_ascii=True):
-    """造一个假的 session jsonl。polls = [(timeout_ms, offset_sec), ...]"""
+def mk_session(d, name, polls, when_iso, marker=None, ensure_ascii=True,
+               rule_text=None, user_text=None):
+    """造一个假的 session jsonl。polls = [(timeout_ms, offset_sec), ...]
+
+    rule_text: 首条 user message 里带上规则原文 → 模拟「看得到规则」
+    user_text: 首条 user message 的正文
+    """
     os.makedirs(d, exist_ok=True)
     base_ts = datetime.datetime.fromisoformat(when_iso.replace('Z', '+00:00')).timestamp()
     head_rec = {"type": "session", "id": name, "timestamp": when_iso}
     if marker:
         head_rec["note"] = marker
+    body = user_text if user_text is not None else 'Read HEARTBEAT.md'
+    if rule_text:
+        body = body + '\n\n' + rule_text
     recs = [json.dumps(head_rec, ensure_ascii=ensure_ascii)]
+    recs.append(json.dumps({
+        "type": "message", "id": "u0", "timestamp": when_iso,
+        "message": {"role": "user", "content": [{"type": "text", "text": body}]},
+    }, ensure_ascii=ensure_ascii))
     for i, (to, off) in enumerate(polls):
         ts = datetime.datetime.fromtimestamp(
             base_ts + off, datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -145,6 +168,18 @@ def main():
     cases.append((r, {'long_total': 1, 'poll_total': 1}, '原始中文标记 → 计入'))
     cases.append((r, {'detail_job': 'daily-learning'}, '原始中文标记 → 归类到 daily-learning'))
 
+    # 场景6b：**半角括号**的标记 → 也要归类到 daily-learning
+    # （2026-10-27 实测踩过：编辑脚本时全角括号被写成半角，
+    #   标记字符串「每日学习（精简版）」变成「每日学习(精简版)」，
+    #   → 真实 session 全部匹配不上，分类静默塌成「未分类」——
+    #   **不报错**，只是所有会话都掉进同一个桶）
+    d = os.path.join(base, 's6b')
+    mk_session(d, 'g', [(180000, 1)], now,
+               marker='每日学习(精简版)', ensure_ascii=False)
+    r = run(d)
+    cases.append((r, {'detail_job': 'daily-learning'},
+                  '半角括号标记 → 仍归类到 daily-learning（标点形式无关）'))
+
     # 时间戳缺失的记录 → 应被忽略而不是崩
     d = os.path.join(base, 's7'); mk_session(d, 'g', [(180000, 1)], now)
     with open(os.path.join(d, 'h.jsonl'), 'w') as fh:
@@ -153,6 +188,49 @@ def main():
              "arguments": {"action": "poll", "sessionId": "x", "timeout": 180000}}]}}) + '\n')
     cases.append((run(d), {'long_total': 1, 'poll_total': 1},
                   '无时间戳的记录 → 忽略不崩，且不影响正常统计'))
+
+    # ---- E49：规则可见性拆分 ----
+    # 场景8：会话上下文里**有**规则原文 + 长 poll → 应算「看得到规则却违规」
+    d = os.path.join(base, 's8')
+    mk_session(d, 'saw', [(180000, 1)], now, rule_text='⏱️ 等长任务：poll 会等满')
+    r = run(d)
+    cases.append((r, {'guilty': 1}, '上下文含规则原文 → 算「看得到规则却违规」'))
+
+    # 场景9：规则写入**之前**启动的会话 + 长 poll → 不算它无视
+    # 注意：这个会话必须**在 12 小时窗口内**有 poll 才会被统计，
+    # 但它的**启动时间**要早于规则写入时间 —— 这正是要验证的区分点。
+    # 用「规则写入时间 - 1 小时」作为启动时间，poll 落在窗口内。
+    pre_start = None
+    try:
+        r = subprocess.run(
+            ['git', '-C', os.path.dirname(os.path.abspath(__file__)) + '/..',
+             'log', '-1', '--format=%ct', '-S', '等长任务', '--', 'TOOLS.md'],
+            capture_output=True, text=True, timeout=30)
+        v = (r.stdout or '').strip().splitlines()
+        if v and v[0].isdigit():
+            pre_start = datetime.datetime.fromtimestamp(int(v[0]), datetime.timezone.utc)
+    except Exception:
+        pass
+    if pre_start is None:
+        # 拿不到规则写入时间 → 退化用「13 小时前」，但那样 poll 会在窗口外
+        # → 这个用例就退化成「窗口外」，用 pre_rule=0 表示
+        pre_iso = old
+        expect_pre = 0
+    else:
+        pre_iso = (pre_start - datetime.timedelta(minutes=5)).isoformat().replace('+00:00', 'Z')
+        expect_pre = 1
+    d = os.path.join(base, 's9')
+    mk_session(d, 'pre', [(180000, 1)], pre_iso)
+    r = run(d)
+    cases.append((r, {'pre_rule': expect_pre, 'guilty': 0},
+                  '规则生效前启动的会话 → 不算「无视规则」'))
+
+    # 场景10：启动晚于规则，但上下文里没有规则原文 → 单独归类，不算无视
+    d = os.path.join(base, 's10')
+    mk_session(d, 'notext', [(180000, 1)], now)
+    r = run(d)
+    cases.append((r, {'no_text': 1, 'guilty': 0},
+                  '启动晚于规则但上下文无规则原文 → 单独归类，不算无视'))
 
     ok = True
     for got, want, desc in cases:
@@ -163,6 +241,10 @@ def main():
             good = good and got['poll_total'] == want['poll_total']
         if 'detail_job' in want:
             good = good and got['detail'].get(want['detail_job']) == got['long_total']
+        # E49 的三段拆分
+        for key in ('guilty', 'pre_rule', 'no_text'):
+            if key in want:
+                good = good and got.get(key, 0) == want[key]
         ok = ok and good
         print(f"{'✅' if good else '❌'} {desc}")
         if not good:
