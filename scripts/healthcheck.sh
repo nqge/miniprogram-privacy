@@ -1012,20 +1012,66 @@ else:
     print("PASS 无「脚本很快但超时失败」的任务")
 
 # 2) timeout 余量对比
+#
+# ⚠️ 2026-10-27 10:50 改判据 —— 原来比的是**各任务 timeout 的绝对值**
+#    （600s vs 1800s → 「差异大，手写的 timeout 彼此不可比」）。
+#    这测的是**不可比的量**：不同任务的 timeout 本来就不该一样
+#    （600s 配一个 300s 的任务 = 刚好；600s 配一个 30s 的任务 = 宽裕）。
+#    绝对值差异大**不构成任何风险信号**。
+#
+# → 改成比**各自的「实测耗时 / timeout」占用率** —— 这才是可比的量，
+#    也正是【U】组在用的口径（>70% FAIL / 递增趋势 WARN）。
+#    本条只做**横向对照**：谁最接近上限，提示「这个任务最脆弱」。
+#
+# 数据源：run history（真实 cron 实测），不是本地手动跑
+# （E40：手动测的是下界，真实 cron 可慢 2~3 倍）。
 tos_map = {}
 for j in jobs:
     p = j.get('payload') or {}
     if p.get('kind') == 'agentTurn':
         tos_map[j.get('name')] = p.get('timeoutSeconds') or 0
-if tos_map:
-    vals = sorted(tos_map.values())
-    lo, hi = vals[0], vals[-1]
-    if hi > 0 and lo < hi * 0.6:
-        tight = [f"{k}={v}s" for k, v in tos_map.items() if v == lo]
-        print(f"WARN cron 超时余量差异大（最小 {lo}s vs 最大 {hi}s）：{', '.join(tight)}"
-              f" —— 手写的 timeout 彼此不可比")
+
+runs_dir = '/root/.openclaw/cron/runs'
+util = []
+for j in jobs:
+    name = j.get('name')
+    tos = tos_map.get(name) or 0
+    if not tos:
+        continue
+    rp = os.path.join(runs_dir, f"{j.get('id')}.jsonl")
+    best = None
+    try:
+        with open(rp, encoding='utf-8', errors='replace') as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get('action') != 'finished':
+                    continue
+                dur = r.get('durationMs') or 0
+                at = r.get('runAtMs') or r.get('ts') or 0
+                # 只看成功的运行（失败的耗时是「烧满 timeout」，不反映真实负载）
+                if r.get('status') != 'ok':
+                    continue
+                if best is None or at > best[0]:
+                    best = (at, dur)
+    except Exception:
+        continue
+    if best and best[1] > 0:
+        util.append((name, best[1] / 1000.0 / tos * 100, tos, best[1] / 1000.0))
+
+if util:
+    util.sort(key=lambda x: -x[1])
+    top = util[0]
+    line = "，".join(f"{n} {p:.0f}%" for n, p, _, _ in sorted(util, key=lambda x: x[1]))
+    if top[1] > 70:
+        print(f"WARN timeout 占用率偏高：{line}"
+              f" —— {top[0]} 已用掉 {top[0] and top[3]:.0f}s/{top[2]}s，逼近上限")
     else:
-        print(f"PASS cron 超时余量合理（{lo}s–{hi}s）")
+        print(f"PASS timeout 占用率健康（{line}）")
+else:
+    print("PASS cron 超时余量合理（无可用实测耗时）")
 print(f"__TO_FAILED__={failed}")
 PY5
 )
