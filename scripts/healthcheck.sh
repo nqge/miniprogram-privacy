@@ -1111,9 +1111,35 @@ echo "【V】会话里的长 poll（指令说了但没照做的信号）"
 # 这样它回答的是真正该问的问题：**「我此刻还在犯吗？」**
 
 poll_report=$(python3 - << 'PY9' 2>/dev/null
-import glob, json, os, time, collections
-SESS = '/root/.openclaw/agents/main/sessions'
-cutoff = time.time() - 3 * 86400
+import glob, json, os, time, collections, datetime, re
+# SESS 可被外部覆盖（单测用）—— 默认指向真实会话目录
+SESS = globals().get('SESSION_DIR', '/root/.openclaw/agents/main/sessions')
+
+# 2026-10-27 12:05 修正（E48）：判据窗口按**每条 poll 的时间戳**算，
+# 不是按文件 mtime。
+#
+# 原实现用 `os.path.getmtime(f) > cutoff` 选文件 —— 有两个毛病：
+#   1. **窗口是 3 天**，但注释和提示都写「最近 12 小时」→ 说的和做的不一致
+#   2. 更要命：**同一个会话文件一直在追加**，
+#      一个 10-25 就开着的会话到 10-27 还在写 → 它的 mtime 永远是「现在」
+#      → 里面 10-25 的长 poll 全被算进「最近 12 小时」
+#
+# → 改成解析每条 toolCall 的 timestamp，窗口 = 最近 12 小时。
+#    12 小时 ≈ 一个工作日，符合「我此刻还在犯吗」这个问题（见注释）。
+WINDOW_HOURS = 12
+cutoff_ts = time.time() - WINDOW_HOURS * 3600
+
+def ts_of(obj):
+    """取一条 jsonl 记录的时间戳（秒级 float）。兼容 ISO 字符串与毫秒数字。"""
+    t = obj.get('timestamp')
+    if isinstance(t, (int, float)):
+        return t / 1000.0 if t > 1e11 else float(t)
+    if isinstance(t, str):
+        try:
+            return datetime.datetime.fromisoformat(t.replace('Z', '+00:00')).timestamp()
+        except Exception:
+            return None
+    return None
 
 # 按**任务**维度统计（不是按会话）—— 因为要改的是「哪个 cron 任务需要提醒」，
 # 而会话 id 对我没意义。2026-10-27 实测：按任务分组后一眼看出
@@ -1127,18 +1153,43 @@ MARKERS = [
 ]
 
 def task_of(head):
+    # 注意：head 是 **JSONL 原文**，非 ASCII 字符可能被转义成 \\uXXXX。
+    # 直接在原文里 find 中文标记，遇到转义就漏判（→ 会话被归到「未分类」）。
+    # 修法：先在原文里找（覆盖真实 session 的情况），
+    #       再对**转义形式**做一次匹配，两条路都试。
     for name, marker in MARKERS:
         if marker in head:
             return name
+        esc = ''.join('\\u%04x' % ord(ch) if ord(ch) > 127 else ch for ch in marker)
+        if esc in head:
+            return name
     return None
+
+# 2026-10-27 12:05 补（E48）：**普通心跳会话原来是隐形人**。
+#
+# 起因：本会话（c2513949，纯 heartbeat，不是任何 cron 任务）用了 3 次长 poll
+#       （180s/200s/220s）—— 违反了 TOOLS.md 的「poll ≤10~15s」规则，
+#       但【V】组**一次都没报**。
+#
+# 根因：`task_of()` 找不到 cron 任务标记 → 返回 None → `continue` → **整个会话被跳过**。
+#       也就是说：**没有任务标记的会话 = 完全不被监控**。
+#       而「按任务维度分组」这个改进（11:45 加的）顺手引入了一个新盲区：
+#       从「按会话统计」变成了「只看 cron 任务会话」。
+#
+# 教训：**分类不该等于过滤**。分组是为了更好的展示，不是为了排除未知类别。
+#       「匹配不上」应该是「归入『未分类』」，而不是「不算」。
+#
+# 修法：匹配不到时归入 'heartbeat/其他'，**所有会话都统计**。
 
 long_by_task = collections.Counter()
 total_by_task = collections.Counter()
+long_by_sess = collections.Counter()
+last_by_sess = {}
 long_total = 0
 poll_total = 0
 
 try:
-    files = [f for f in glob.glob(f'{SESS}/*.jsonl') if os.path.getmtime(f) > cutoff]
+    files = glob.glob(f'{SESS}/*.jsonl')
 except Exception:
     files = []
 
@@ -1148,7 +1199,8 @@ for f in files:
             head = fh.read(2500)
             job = task_of(head)
             if not job:
-                continue
+                # 不再跳过 —— 归入「未分类」桶，保证所有会话都被统计（E48）
+                job = 'heartbeat/其他'
             fh.seek(0)
             for line in fh:
                 if '"toolCall"' not in line:
@@ -1156,6 +1208,10 @@ for f in files:
                 try:
                     d = json.loads(line)
                 except Exception:
+                    continue
+                # 按**每条 poll 的时间戳**过滤窗口（E48），不用文件 mtime
+                ts = ts_of(d)
+                if ts is None or ts < cutoff_ts:
                     continue
                 m = d.get('message') or {}
                 c = m.get('content')
@@ -1178,21 +1234,39 @@ for f in files:
                     if t > 60000:
                         long_total += 1
                         long_by_task[job] += 1
+                        sid = os.path.basename(f)[:8]
+                        long_by_sess[sid] += 1
+                        if sid not in last_by_sess or ts > last_by_sess[sid]:
+                            last_by_sess[sid] = ts
     except Exception:
         continue
 
 if long_total:
     detail = ', '.join(f"{k}×{v}" for k, v in long_by_task.most_common())
     worst = long_by_task.most_common(1)[0]
-    print(f"WARN 最近 3 天有 {long_total} 次长 poll（timeout>60s）：{detail}")
+    # 按会话归属 —— 区分「还在犯」和「已经停了」是关键信息（E48）
+    sess_detail = ', '.join(
+        f"{k}×{v}({datetime.datetime.fromtimestamp(last_by_sess[k]).astimezone().strftime('%m-%d %H:%M')})"
+        for k, v in long_by_sess.most_common(4)
+    )
+    print(f"WARN 最近 {WINDOW_HOURS} 小时有 {long_total} 次长 poll（timeout>60s）：{detail}")
+    print(f"     共 {poll_total} 次 poll，其中 {long_total} 次过长")
     print(f"     最严重：{worst[0]}（{worst[1]} 次）")
+    print(f"     按会话：{sess_detail}")
+    print(f"     ↑ 括号内是**最后一次**违规时间 —— 早于最近一小时的 = 已经停了，"
+          f"不用再追；新鲜的才是还在犯")
+    if 'heartbeat/其他' in long_by_task:
+        print(f"     ⚠️ 其中 {long_by_task['heartbeat/其他']} 次来自**未分类会话**"
+              f"（普通心跳/手动会话，不是 cron 任务）——"
+              f"这类会话以前完全不计入（E48 修掉的盲区）")
     print(f"     排查方向：① 指令里有没有【等待方式】提醒"
           f" ② 它等的那个长任务**该不该跑**"
           f"（2026-10-27 实测：daily-learning 自己跑去跑 healthcheck.sh，"
           f"那本来就该由 07:00 的 cron 干 —— 属于「没必要做的长任务」）"
           f" ③ 确实要跑的话用 sessions_spawn，而不是 poll")
 else:
-    print(f"PASS 会话里没有长 poll（共 {poll_total} 次 poll，全部 ≤60s）")
+    print(f"PASS 最近 {WINDOW_HOURS} 小时没有长 poll"
+          f"（共 {poll_total} 次 poll，全部 ≤60s）")
 PY9
 )
 while IFS= read -r line; do
@@ -1202,6 +1276,28 @@ while IFS= read -r line; do
     *) [ -n "$line" ] && echo "  $line" ;;
   esac
 done <<< "$poll_report"
+PASS=$((PASS + 1))
+
+echo "【W】【V】判据自身的单测（防判据本身是坏的）"
+
+# 2026-10-27 12:20 补：
+# 【V】组今天连修三个 bug（窗口 3天 vs 说的12h、mtime 过滤、无标记会话被跳过），
+# 每一个都是**判据本身**错了 —— 而【V】报的是「长 poll 数量」，
+# 判据坏了它照样会输出一个看起来正常的数字。
+#
+# 典型的自指陷阱：**一个坏掉的断言看起来和好断言一样正常**。
+# 所以判据逻辑必须有独立单测，且单测要**直接跑真身代码**。
+#
+# scripts/test_v_poll_assertion.py 从 healthcheck.sh 的 PY9 块里**抽取真身**
+# 来跑（不是抄一份）→ 判据改了单测立刻跟着变，物理上无法漂移。
+v_unit_out=$(python3 scripts/test_v_poll_assertion.py 2>&1)
+if [ $? -eq 0 ]; then
+  v_unit_cases=$(printf '%s' "$v_unit_out" | grep -c '^✅')
+  ok "【V】判据单测通过（${v_unit_cases} 个用例，覆盖窗口/分类/漏报/不误报）"
+else
+  bad "【V】判据单测失败 —— 【V】组的数字不可信"
+  printf '%s\n' "$v_unit_out" | sed 's/^/    /'
+fi
 PASS=$((PASS + 1))
 
 echo "【U】cron 实测耗时 vs 超时余量（防明天早上撞超时）"
