@@ -77,9 +77,27 @@ else
   fi
 fi
 
-DIRTY=$(git status --porcelain 2>/dev/null | grep -v '^??' | wc -l)
+# 2026-10-27 20:45 补（E51）：
+# `memory/teahouse_state.json` 是**纯运行时状态**（seen_ids + last_check 时间戳），
+# 每 2 小时的 teahouse-monitor cron 都会改它 → **每次跑完工作区都是脏的**。
+# → 备份审计每次都 WARN「工作区有未提交改动」→ **一个永远不会安静的告警**。
+#
+# 这类文件**不能 gitignore**（seen_ids 丢了会重复蒸馏 96 条 issue，必须有备份），
+# 但也不该算进「有意义��改动」——
+# 否则真出现「改代码忘了提交」时，会被这条噪音淹没。
+#
+# 判据：把「纯运行时状态文件」从 DIRTY 里剔出来单独计数；
+#      剔除后仍为 0 → PASS；> 0 → WARN（真改动）；另有运行时文件 → 附注说明。
+RUNTIME_STATE_FILES="memory/teahouse_state.json"
+_dirty_all=$(git status --porcelain 2>/dev/null | grep -v '^??')
+DIRTY=$(printf '%s' "$_dirty_all" | grep -vF -f <(printf '%s\n' $RUNTIME_STATE_FILES) | grep -c . )
+RUNTIME_DIRTY=$(printf '%s' "$_dirty_all" | grep -cF -f <(printf '%s\n' $RUNTIME_STATE_FILES))
 if [ "$DIRTY" = "0" ]; then
-  ok "工作区无未提交改动"
+  if [ "$RUNTIME_DIRTY" -gt 0 ]; then
+    ok "工作区无未提交改动（$RUNTIME_DIRTY 个运行时状态文件有变动，属正常）"
+  else
+    ok "工作区无未提交改动"
+  fi
 else
   warn "工作区有 $DIRTY 个未提交改动"
 fi
