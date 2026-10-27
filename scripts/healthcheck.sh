@@ -1822,27 +1822,75 @@ echo "【Z】压缩后重注入的上下文预算（防红线被截掉）"
 # 判据：两节合计 > 2400（80%）→ WARN；> 2800（93%）→ FAIL
 
 z_budget=$(python3 - << 'PYZ' 2>/dev/null
-import re
+import re, json, os
 AGENTS = '/root/.openclaw/workspace/AGENTS.md'
+CFG    = '/root/.openclaw/openclaw.json'
 MAX = 3000          # 源码里的 MAX_CONTEXT_CHARS
-LEGACY = ['Every Session', 'Safety']
+# 源码 pi-embedded-*.js 里的两套名单：
+DEFAULT = ['Session Startup', 'Red Lines']       # DEFAULT_POST_COMPACTION_SECTIONS
+LEGACY  = ['Every Session', 'Safety']            # LEGACY_POST_COMPACTION_SECTIONS
 try:
     s = open(AGENTS, encoding='utf-8').read()
 except Exception as e:
     print(f"FAIL 读不到 AGENTS.md（{type(e).__name__}）")
     raise SystemExit(1)
 
-def extract(name):
-    m = re.search(rf'^##\s+{re.escape(name)}\s*$(.*?)(?=^##\s|\Z)',
-                  s, re.M | re.S)
-    return m.group(0) if m else ""
+def extract_src(name):
+    """**逐字复刻源码的 extractSections()**（含 H2/H3 匹配、代码块保护、level<=lvl 截断）
+    —— 断言必须用与真身一样的算法，否则就是「测的不是真家伙」。"""
+    lines = s.split("\n")
+    out, in_section, sec_level, in_code = [], False, 0, False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            in_code = not in_code
+            if in_section: out.append(line)
+            continue
+        if in_code:
+            if in_section: out.append(line)
+            continue
+        m = re.match(r'^(#{2,3})\s+(.+?)\s*$', line)
+        if m:
+            level, text = len(m.group(1)), m.group(2)
+            if not in_section:
+                if text.lower() == name.lower():
+                    in_section, sec_level = True, level
+                    out = [line]
+                    continue
+            else:
+                if level <= sec_level: break
+                out.append(line); continue
+        if in_section: out.append(line)
+    return "\n".join(out).strip() if out else ""
 
-sections = [extract(n) for n in LEGACY]
-sizes = {n: len(t) for n, t in zip(LEGACY, sections)}
+# ── 复刻源码的「配置 → default → fallback legacy」决策链 ──────────
+configured = None
+if os.path.exists(CFG):
+    try:
+        configured = (json.load(open(CFG, encoding='utf-8'))
+                      .get('agents', {}).get('defaults', {})
+                      .get('compaction', {}).get('postCompactionSections'))
+    except Exception:
+        configured = None
+
+if isinstance(configured, list) and configured:
+    names = configured
+    mode = f"配置指定 {configured}"
+else:
+    names = DEFAULT
+    mode = "默认名单"
+
+sections = [extract_src(n) for n in names]
+# 源码：if (sections.length === 0 && isDefaultSections) → 回退 legacy
+if not any(sections) and not (isinstance(configured, list) and configured):
+    names = LEGACY
+    sections = [extract_src(n) for n in names]
+    mode = f"默认名单找不到 → 回退 legacy {LEGACY}"
+
+sizes = {n: len(t) for n, t in zip(names, sections)}
 total = sum(sizes.values())
 
 if not all(sections):
-    print("WARN 找不到 legacy 注入小节（Session Startup/Red Lines 或 Every Session/Safety）")
+    print(f"WARN 找不到注入小节（当前判定：{mode}）")
     print(f"     当前: {sizes} → 若配置改过，注入行为可能已变，需重新核对")
 elif total > MAX * 0.93:
     print(f"FAIL 压缩重注入的上下文已用 {total}/{MAX} 字符（{total*100//MAX}%）"
@@ -1852,7 +1900,7 @@ elif total > MAX * 0.80:
           f" —— 余量不多，再加要小心把红线挤掉")
 else:
     detail = ", ".join(f"{k}={v}" for k, v in sizes.items())
-    print(f"PASS 压缩重注入预算充足（{total}/{MAX} 字符，余量 {MAX-total}；{detail}）")
+    print(f"PASS 压缩重注入预算充足（{total}/{MAX} 字符，余量 {MAX-total}；{detail}；{mode}）")
 PYZ
 )
 while IFS= read -r line; do
