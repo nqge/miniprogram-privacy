@@ -24,7 +24,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 22 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=63 FAIL=3 WARN=3
+**巡检现状**: 22 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=63 FAIL=3 WARN=2
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -223,3 +223,19 @@
 **顺带查清**: backup-audit 03:00/03:27/03:38 三连超时（error 原文 `cron: job execution timed out`）
    —— 昨晚已定位为 E35「poll 阻塞满 timeout」并修复，03:55 的 47.2s 就是修复后运行 ✅
 **残留项**: 1 PAT 吊销（需牛哥哥本人）· 1 第二 provider key（需牛哥哥提供）· 5 博客方向
+
+### 2026-10-27 11:45 心跳 — 长 poll 真根因：跑了不该跑的任务
+**起因**: 【V】只报总数和会话分布 → 看不出该改什么 → 改成按 cron 任务维度报告
+   （daily-learning×12, backup-audit×9, healthcheck×5）
+**真根因**（比「poll timeout 长」深一层）:
+   - daily-learning 09:00 那次的 447s 全在等 healthcheck.sh
+   - backup-audit 也有 3 次 120s poll 等同一个脚本
+   - **而 daily-learning 的指令根本没要求它跑巡检** —— 它自己跑去跑的
+   → 不是「等法慢」，是「做了本不该做的事」
+**✅ 已做**:
+1. 【V】按任务维度报告 + 排查方向写进提示（含「该问它该不该跑」）
+2. 3 条 cron 指令加【别跑不必要的巡检】：
+   - daily-learning: 不跑 healthcheck.sh（07:00 cron 的职责）；确认 L1 只跑 verify_l1（~67s）
+   - backup-audit: 只跑自己的脚本（0.2s）
+   - healthcheck: 只跑一次巡检，yieldMs + 短 poll
+**层次**: E35「慢的是等法不是任务」→ E41「指令说了也不照做」→ **「有时候根本不该跑」**

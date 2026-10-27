@@ -1111,12 +1111,32 @@ echo "【V】会话里的长 poll（指令说了但没照做的信号）"
 # 这样它回答的是真正该问的问题：**「我此刻还在犯吗？」**
 
 poll_report=$(python3 - << 'PY9' 2>/dev/null
-import glob, json, os, time, collections, datetime
+import glob, json, os, time, collections
 SESS = '/root/.openclaw/agents/main/sessions'
-cutoff = time.time() - 12 * 3600
-long_polls = collections.Counter()
-recent_polls = collections.Counter()
-total_polls = 0
+cutoff = time.time() - 3 * 86400
+
+# 按**任务**维度统计（不是按会话）—— 因为要改的是「哪个 cron 任务需要提醒」，
+# 而会话 id 对我没意义。2026-10-27 实测：按任务分组后一眼看出
+# daily-learning 21 次 / backup-audit 9 次 / healthcheck 5 次。
+MARKERS = [
+    ('healthcheck', 'scripts/healthcheck.sh'),
+    ('backup-audit', 'scripts/backup_audit.sh'),
+    ('teahouse-monitor', 'scripts/teahouse_monitor.py'),
+    ('daily-learning', '每日学习（精简版）'),
+    ('daily-reflection', '每日反思三问'),
+]
+
+def task_of(head):
+    for name, marker in MARKERS:
+        if marker in head:
+            return name
+    return None
+
+long_by_task = collections.Counter()
+total_by_task = collections.Counter()
+long_total = 0
+poll_total = 0
+
 try:
     files = [f for f in glob.glob(f'{SESS}/*.jsonl') if os.path.getmtime(f) > cutoff]
 except Exception:
@@ -1124,67 +1144,62 @@ except Exception:
 
 for f in files:
     try:
-        for line in open(f, encoding='utf-8', errors='replace'):
-            if '"toolCall"' not in line:
+        with open(f, encoding='utf-8', errors='replace') as fh:
+            head = fh.read(2500)
+            job = task_of(head)
+            if not job:
                 continue
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            m = d.get('message') or {}
-            c = m.get('content')
-            if not isinstance(c, list):
-                continue
-            for x in c:
-                if not isinstance(x, dict) or x.get('type') != 'toolCall':
+            fh.seek(0)
+            for line in fh:
+                if '"toolCall"' not in line:
                     continue
-                if x.get('name') != 'process':
-                    continue
-                a = x.get('arguments') or {}
-                if a.get('action') != 'poll':
-                    continue
-                total_polls += 1
-                t = a.get('timeout') or 0
                 try:
-                    t = int(t)
+                    d = json.loads(line)
                 except Exception:
                     continue
-                if t > 60000:
-                    long_polls[os.path.basename(f)[:8]] += 1
-                    # 判定只看最近 12 小时：按 toolCall 自己的时间戳算，
-                    # 不能用文件 mtime（同一会话文件一直在被追加）
-                    ts = d.get('timestamp') or m.get('timestamp') or ''
-                    if ts:
-                        try:
-                            tt = datetime.datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                            if tt.timestamp() > cutoff:
-                                recent_polls[os.path.basename(f)[:8]] += 1
-                        except Exception:
-                            pass
+                m = d.get('message') or {}
+                c = m.get('content')
+                if not isinstance(c, list):
+                    continue
+                for x in c:
+                    if not isinstance(x, dict) or x.get('type') != 'toolCall':
+                        continue
+                    if x.get('name') != 'process':
+                        continue
+                    a = x.get('arguments') or {}
+                    if a.get('action') != 'poll':
+                        continue
+                    try:
+                        t = int(a.get('timeout') or 0)
+                    except Exception:
+                        continue
+                    poll_total += 1
+                    total_by_task[job] += 1
+                    if t > 60000:
+                        long_total += 1
+                        long_by_task[job] += 1
     except Exception:
         continue
 
-if recent_polls:
-    n = sum(recent_polls.values())
-    detail = ', '.join(f"{k}×{v}" for k, v in recent_polls.most_common(5))
-    hist = sum(long_polls.values()) - n
-    extra = f"（另有 {hist} 次属 12 小时前的历史存量，不参与判定）" if hist > 0 else ""
-    print(f"WARN 最近 12 小时有 {n} 次长 poll（timeout>60s）：{detail}{extra}"
-          f" —— poll 会等满 timeout，是 E35「任务超时≠任务慢」的成因")
-    print(f"WARN 修法：TOOLS.md「等长任务」一节 —— 等后台进程用 "
-          f"process(poll, timeout=10000)，每次最多 10~15 秒；"
-          f"超过 2 分钟的任务改用 sessions_spawn（推送式完成，不轮询）")
-elif long_polls:
-    n = sum(long_polls.values())
-    print(f"PASS 最近 12 小时无长 poll（12 小时前有 {n} 次历史存量，不参与判定）")
+if long_total:
+    detail = ', '.join(f"{k}×{v}" for k, v in long_by_task.most_common())
+    worst = long_by_task.most_common(1)[0]
+    print(f"WARN 最近 3 天有 {long_total} 次长 poll（timeout>60s）：{detail}")
+    print(f"     最严重：{worst[0]}（{worst[1]} 次）")
+    print(f"     排查方向：① 指令里有没有【等待方式】提醒"
+          f" ② 它等的那个长任务**该不该跑**"
+          f"（2026-10-27 实测：daily-learning 自己跑去跑 healthcheck.sh，"
+          f"那本来就该由 07:00 的 cron 干 —— 属于「没必要做的长任务」）"
+          f" ③ 确实要跑的话用 sessions_spawn，而不是 poll")
 else:
-    print(f"PASS 会话里没有长 poll（共 {total_polls} 次 poll，全部 ≤60s）")
+    print(f"PASS 会话里没有长 poll（共 {poll_total} 次 poll，全部 ≤60s）")
 PY9
 )
 while IFS= read -r line; do
   case "$line" in
     PASS*) ok "${line#PASS }" ;;
     WARN*) warn "${line#WARN }" ;;
+    *) [ -n "$line" ] && echo "  $line" ;;
   esac
 done <<< "$poll_report"
 PASS=$((PASS + 1))
