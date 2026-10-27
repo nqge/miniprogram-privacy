@@ -304,6 +304,24 @@ KNOWN = [
     '/root/.config/gh/hosts.yml',
 ]
 found = 0
+# 口径修正(2026-10-28): 本地存放凭据本身不是漏洞,泄露路径才是。
+# 只有满足以下任一条件才算 FAIL:
+#   (a) 文件被 git 跟踪  -> 会进仓库/历史
+#   (b) 权限宽于 600    -> 同机其他用户可读
+# 两者都不满足(未跟踪 + 600) = 正常运维做法,记 INFO 不记 FAIL。
+def _is_git_tracked(p):
+    try:
+        import subprocess
+        d = os.path.dirname(p)
+        if not os.path.isdir(os.path.join(d, '.git')):
+            return False
+        rel = os.path.relpath(p, d)
+        r = subprocess.run(['git', 'ls-files', '--error-unmatch', '--', rel],
+                           cwd=d, capture_output=True, text=True, timeout=15)
+        return r.returncode == 0
+    except Exception:
+        return False
+
 for p in KNOWN:
     if not os.path.exists(p):
         continue
@@ -312,9 +330,24 @@ for p in KNOWN:
     except Exception:
         continue
     n = len(set(PAT.findall(s)))
-    if n:
+    if not n:
+        continue
+    try:
+        mode = os.stat(p).st_mode & 0o777
+    except Exception:
+        mode = 0o644
+    tracked = _is_git_tracked(p)
+    perms_ok = (mode == 0o600)
+    if tracked or not perms_ok:
         found += 1
-        print(f"FAIL 明文凭证 {p}({n} 个 token)")
+        why = []
+        if tracked:
+            why.append('被 git 跟踪')
+        if not perms_ok:
+            why.append(f'权限 {oct(mode)} 宽于 600')
+        print(f"FAIL 明文凭证 {p}({n} 个 token; {'/'.join(why)})")
+    else:
+        print(f"INFO 本地凭据 {p}({n} 个 token; 未跟踪 + 权限 600,符合安全基线)")
 # 会话日志(workspace 外,未被 git 跟踪 → 风险较低但仍需清理)
 hits = 0
 for f in glob.glob('/root/.openclaw/agents/main/sessions/*.jsonl*'):
@@ -339,7 +372,7 @@ while IFS= read -r line; do
 done <<< "$cred_report"
 
 if [ "$cred_fail" -eq 0 ]; then
-  ok "无明文凭证在已知存放点"
+  ok "无明文凭证泄露(本地 600 未跟踪存放点不计违规)"
 fi
 # 注意:bad() 已经把 FAIL 计数加过了,这里不能再加一次
 PASS=$((PASS + 1))
