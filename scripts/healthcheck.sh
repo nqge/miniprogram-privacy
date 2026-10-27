@@ -160,14 +160,82 @@ fi
 # L1 经验库检索验证 -- 每条经验都必须能被自己的原文措辞搜到
 # 2026-10-26 实测:19 条里有 4 条塞在长文件里检索不到(E17 的问题),
 # 拆成独立文件后 19/19 全部命中。写下来的经验搜不到 = 等于没写。
-l1_out=$(timeout 280 python3 /root/.openclaw/workspace/scripts/verify_l1_retrieval.py 2>/dev/null)
-l1_rc=$?
-l1_line=$(echo "$l1_out" | grep "结果:")
+# 2026-10-27 16:00 加缓存(E50 的延伸：别反复做同一件没价值的活)：
+# verify_l1 要跑 17 次真检索，每次起一个 Node 进程 ≈ 67s。
+# 而 **L1 库一天不变**(除非加了新条目) → 当天重复验证是纯浪费。
+#
+# 缓存 key = **L1 库的内容指纹**(所有独立文件内容的 md5)
+# → 加了新条目 → 指纹变 → 缓存自动失效 → 重新验证
+# → 既省掉重复劳动，又不会漏掉「新条目没被验证」。
+#
+# ⚠️ 缓存不能只按「天」—— 那样新加的条目当天就验不到
+#    (那是「派生数据会过期」的同款问题：缓存也会过期)。
+l1_cache=/tmp/openclaw/l1_verify_cache.json
+l1_fp=$(python3 - << 'PYF' 2>/dev/null
+import glob, hashlib
+h = hashlib.md5()
+for f in sorted(glob.glob('/root/.openclaw/workspace/memory/L1-entries/E*.md')):
+    try:
+        with open(f, 'rb') as fh:
+            h.update(fh.read())
+    except Exception:
+        pass
+print(h.hexdigest())
+PYF
+)
+# 缓存里只存**结论**（rc + 结果行 + 失败明细），不存完整输出 ——
+# 多行输出塞进 shell 变量再取回来会丢格式（实测：结果行取不到了）。
+l1_out=""
+l1_rc=1
+l1_hit=0
+l1_line=""
+if [ -n "$l1_fp" ] && [ -f "$l1_cache" ]; then
+  l1_cache_read=$(python3 - "$l1_cache" "$l1_fp" << 'PYG' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding='utf-8'))
+    if d.get('fp') == sys.argv[2]:
+        print(json.dumps({"rc": d.get("rc", 1),
+                          "line": d.get("line", ""),
+                          "fails": d.get("fails", [])}, ensure_ascii=False))
+except Exception:
+    print("")
+PYG
+)
+  if [ -n "$l1_cache_read" ]; then
+    l1_hit=1
+    l1_rc=$(echo "$l1_cache_read" | python3 -c "import json,sys;print(json.load(sys.stdin).get('rc',1))" 2>/dev/null || echo 1)
+    l1_line=$(echo "$l1_cache_read" | python3 -c "import json,sys;print(json.load(sys.stdin).get('line',''))" 2>/dev/null)
+    l1_fails=$(echo "$l1_cache_read" | python3 -c "import json,sys;[print(x) for x in json.load(sys.stdin).get('fails',[])]" 2>/dev/null)
+  fi
+fi
+if [ "$l1_hit" -eq 0 ]; then
+  l1_out=$(timeout 280 python3 /root/.openclaw/workspace/scripts/verify_l1_retrieval.py 2>/dev/null)
+  l1_rc=$?
+  l1_line=$(echo "$l1_out" | grep "结果:" | head -1)
+  l1_fails=$(echo "$l1_out" | grep '❌' | head -5)
+  if [ -n "$l1_fp" ]; then
+    python3 - "$l1_cache" "$l1_fp" "$l1_rc" "$l1_line" "$l1_fails" << 'PYH' 2>/dev/null
+import json, os, sys
+try:
+    os.makedirs(os.path.dirname(sys.argv[1]), exist_ok=True)
+    json.dump({"fp": sys.argv[2], "rc": int(sys.argv[3]),
+               "line": sys.argv[4], "fails": sys.argv[5].split("\n") if sys.argv[5] else []},
+              open(sys.argv[1], 'w', encoding='utf-8'), ensure_ascii=False)
+except Exception:
+    pass
+PYH
+  fi
+fi
 if [ "$l1_rc" -eq 0 ]; then
-  ok "L1 经验库检索验证通过（$l1_line)"
+  if [ "$l1_hit" -eq 1 ]; then
+    ok "L1 经验库检索验证通过（$l1_line，缓存命中）"
+  else
+    ok "L1 经验库检索验证通过（$l1_line）"
+  fi
 else
   bad "L1 经验库有经验检索不到 -- $l1_line"
-  echo "$l1_out" | grep '❌' | sed 's/^/        /' | head -5
+  echo "$l1_fails" | sed 's/^/        /' | head -5
 fi
 
 # 完整的 systemd 配置漂移检查(单元 enabled / 脚本存在 / 关键指令生效 / 定时器调度)
