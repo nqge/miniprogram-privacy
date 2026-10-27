@@ -24,7 +24,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 21 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=61 FAIL=4 WARN=1
+**巡检现状**: 21 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=61 FAIL=3 WARN=2
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -43,11 +43,11 @@
 **providers**: minimax
 
 **cron 任务**:
-- `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (207s)
-- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (163s)
-- `daily-learning` — cron 0 9 * * * · timeout 420s · last: ok (362s)
+- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (104s)
 - `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (47s)
-- `daily-reflection` — cron 0 22 * * 0 · timeout 420s · last: ok (30s)
+- `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (298s)
+- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (772s)
+- `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: ok (30s)
 
 **plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw
 <!-- END:gen_system_status -->
@@ -143,3 +143,18 @@
    - 恢复 → PASS ✅
 **教训**: 我第一次注入到 jobs.json，但【U】读的是 **run history** → 没抓到。
    **断言的数据源必须先确认，再设计注入验证。**
+
+### 2026-10-27 09:35 心跳 — 修完根因后，监控还在量修复前的那次测量（E45）
+**巡检报**: `daily-learning` 772s / timeout 900s = 86%，【U】组 FAIL「余量告急」
+**关键判断**: 根因（E44 手工迭代字数）**09:24 已修复**——
+   确定性裁剪脚本 `scripts/trim_learning_section.py`（实测 **0.057s**）+ 指令重写为「1-2 次收敛」。
+   但 `lastDurationMs` 仍是修复前那次的 772s → **断言在拿历史遗留数据报警**。
+**已做**:
+   1. timeout 900s → **1800s**（772/1800 = 43%）——留冗余，不靠「下次跑快了就绿」
+   2. 裁剪脚本双向验证：`--check` 短稿正确退出 1；`--from` 150 汉字免裁剪，0.057s
+   3. `gen_system_status.py --update` 重生成系统状态段
+   4. 写入 **E45**（L1 库 + 独立文件），条目 44 → 45；**检索验证排第 1**（0.517 vs 第 2 名 0.374）
+   5. 复跑巡检 → 【U】✅ PASS（PASS=61 FAIL=4 WARN=1）
+**教训**: 断言红了，先确认它量的是不是「现在」。「量错了东西」(E42) 与「量的是历史」(E45) 是两种病，
+   后者更隐蔽——它看起来一直很勤奋，从不偷懒。
+**残留项**: 3 个 FAIL 均为长期项（PAT 明文 ×2 等牛哥哥吊销重签；provider fallback 同账号兜底无效）
