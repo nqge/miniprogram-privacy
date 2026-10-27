@@ -308,3 +308,31 @@ cron `healthcheck` 每日 07:00 自动跑（isolated / no-deliver）。
   不要凭印象猜谁在刷屏。
 - 查 systemd 日志**别只按 unit 名过滤** —— 实例化 unit 名（`xxx@yyy.service`）
   会导致 `journalctl -u` 返回 No entries，明明发生了却查不到。**全量 grep 才准**。
+
+---
+
+## ⚠️ heredoc 里的 `>` 会被 shell 当成重定向（2026-10-27 实测）
+
+**现象**：往 `memory/2026-10-27.md` 追加内容时，正文里有 `> 本条讲：**关键词**`
+→ shell 把 `>` 当重定向 → **在当前目录生成了一个空文件** `本条讲：**关键词**`
+→ 而且它被 `git add -A` 一起提交了。
+
+**根因**：heredoc（`<< 'EOF'`）只能防**变量展开**，**防不住 shell 元字符被解析** ——
+除非那些字符出现在 heredoc **正文**里被当命令读。
+实际上问题在于我在**同一条命令**里先跑了 `cat >> file << 'EOF' ... EOF`，
+而 `>` 出现在 heredoc 的**内容**中；某些 shell/上下文下会被二次解析。
+
+**✅ 安全做法**：
+1. **正文里避免裸 `>`** —— 写成 `本条讲：**关键词**`（去掉行首 `>`）
+2. 或者**用 Python 写文件**，不用 heredoc：
+   ```bash
+   python3 - << 'PY'
+   from pathlib import Path
+   Path('/root/.openclaw/workspace/memory/xxx.md').open('a').write("...\n")
+   PY
+   ```
+3. 或者**写完立刻检查**：`git status --short` + `ls`
+
+**检测**：【K】工作区根目录整洁度组会抓（用 `os.listdir`，不依赖 git 跟踪状态）
+→ 实测注入验证：❌ FAIL 根目录有多余文件「本条讲：**关键词**」(0 字节)
+
