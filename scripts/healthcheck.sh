@@ -1528,6 +1528,71 @@ if long_total:
               f"(普通心跳/手动会话,不是 cron 任务）——"
               f"这类会话以前完全不计入(E48 修掉的盲区)")
 
+    # ── E50 补：**归属**维度 ─────────────────────────────────────
+    # 「等法合规吗」和「这活该谁跑」是**两个不同的问题**。
+    # 只看 timeout 的话，把 timeout 调小就能骗过断言 —— 但重复劳动还在。
+    # 这里问：被等的那个脚本，是不是这个会话**本来该跑**的？
+    #
+    # 归属表：某个脚本该由哪个 cron 负责
+    OWNER = {
+        "scripts/healthcheck.sh": "healthcheck(07:00)",
+        "scripts/backup_audit.sh": "backup-audit(03:00)",
+        "scripts/teahouse_monitor.py": "teahouse-monitor(每4h)",
+    }
+    wrong_owner = {}
+    for f in files:
+        try:
+            with open(f, encoding='utf-8', errors='replace') as fh:
+                head = fh.read(2500)
+                job = task_of(head)
+                if not job:
+                    continue
+                fh.seek(0)
+                last_exec = ""
+                for line in fh:
+                    if '"toolCall"' not in line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except Exception:
+                        continue
+                    m = d.get("message") or {}
+                    c = m.get("content")
+                    if not isinstance(c, list):
+                        continue
+                    for x in c:
+                        if not isinstance(x, dict) or x.get("type") != "toolCall":
+                            continue
+                        nm = x.get("name")
+                        a = x.get("arguments") or {}
+                        if nm == "exec":
+                            cmd = str(a.get("command", ""))
+                            last_exec = ""
+                            for script in OWNER:
+                                if script in cmd:
+                                    last_exec = script
+                                    break
+                        elif nm == "process" and a.get("action") == "poll":
+                            try:
+                                t = int(a.get("timeout") or 0)
+                            except Exception:
+                                t = 0
+                            if t > 60000 and last_exec:
+                                # 这个会话是不是该脚本的属主？
+                                owner = OWNER[last_exec]
+                                if job not in owner:
+                                    wrong_owner.setdefault(
+                                        (last_exec, owner, job), []).append(1)
+        except Exception:
+            continue
+    if wrong_owner:
+        print(f"     ── 按「这活该谁跑」拆分（E50）──")
+        for (script, owner, job), lst in sorted(wrong_owner.items(), key=lambda kv: -len(kv[1])):
+            print(f"     🔴 {job} 在等 {script}（属 {owner}）× {len(lst)} 次")
+        print(f"        → **合规 ≠ 有价值**：把 timeout 调小能骗过断言，"
+              f"但这活本来该由那个 cron 干，手动重跑是重复劳动")
+        print(f"        → 验收时跑一次合理，反复跑是习惯")
+
     # 2026-10-27 13:00(E49):区分「无视规则」和「没看到规则」
     g_total = sum(guilty.values())
     n_total = sum(not_guilty.values())
