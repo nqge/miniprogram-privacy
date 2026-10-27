@@ -24,7 +24,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 22 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=63 FAIL=3 WARN=2
+**巡检现状**: 22 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=63 FAIL=3 WARN=5
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -250,3 +250,21 @@
    3. 独立文件重号 + 编号连续性（缺号 = 条目被删了）
 **注入验证**: E46.md 标题改成 E42 → 两条 FAIL 同时报出 ✅；恢复 → PASS ✅
 **教训**: 计数一致 ≠ 内容完整。**引用编号一致性**才是内容完整性的真检查
+
+### 2026-10-27 11:28–12:10 心跳 — 【E47】断言只看「最近一次」= 没在看历史
+**起因**: 巡检全绿（PASS=63/FAIL=3/WARN=2），cron 状态字段全 `ok` → 我顺手翻历史，
+   翻出巡检完全看不见的 **6 次「跑完了但没送到牛哥哥手上」**
+**根因**: `check_cron_delivery.py` 只读 `state.lastRunStatus`/`lastDelivered` → **只有最近一次**
+**最毒**: `ok-but-not-delivered` 正是 AGENTS.md「状态字段≠用户得到结果」的**反面**——断言自己犯了
+**取证坑**: `not-delivered` 对 `mode=none`（teahouse/backup-audit）是**设计如此**，
+   对 `mode=announce` 才是故障 → **判定前必须先按 delivery.mode 分组**
+**✅ 已做**:
+1. `check_cron_delivery.py` 增历史检查（`cron runs --id --limit 20`）：
+   最近一次未投递→FAIL；历史有但最近已好→WARN（带时间点）
+2. **注入故障验证**：强制判未投递 → 正确 FAIL（`__FAILED__=3`）→ 恢复 → PASS ✅
+3. 一次抓出 6 个静默失败（healthcheck 1 / daily-learning 3 / daily-reflection 2）
+4. 新增 **E47**（独立文件+主库），L1 46→47，**47/47 可检索** ✅
+   （【O】计数断言当场抓到我漏同步 MEMORY.md/主库头部 → 已改）
+**教训**: 「当前值正常」推不出「历史正常」；断言字段要和「用户得到的结果」对齐
+**残留项**: 1 PAT 吊销（需牛哥哥本人）· 1 第二 provider key（需牛哥哥提供）
+   · 2 个明文凭证文件（需牛哥哥处理）· 5 博客方向（需牛哥哥定方向）

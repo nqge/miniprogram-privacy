@@ -10,6 +10,24 @@ import json
 import os
 import subprocess
 import sys
+import datetime
+
+
+def _load_history(env, job_id, limit=20):
+    """拉取某个 job 的历史运行记录（用于检查历史投递失败）。
+
+    `cron list --json` 只给「最近一次」的状态，看不到历史。
+    历史里藏着「ok 但没投出去」的静默失败 —— 断言只看 lastRun 就会漏。
+    """
+    try:
+        r = subprocess.run(
+            ["openclaw", "cron", "runs", "--id", job_id, "--limit", str(limit)],
+            capture_output=True, text=True, timeout=90, env=env,
+        )
+        d = json.loads(r.stdout[r.stdout.find("{"):])
+        return d.get("runs", d.get("entries", []))
+    except Exception:
+        return None  # 取不到不算失败，但不能当成「没问题」
 
 
 def main() -> int:
@@ -59,6 +77,50 @@ def main() -> int:
                 failed += 1
         else:
             print(f"PASS {name} 运行正常（no-deliver）")
+
+        # ---- 历史投递检查 ----
+        # lastRunStatus 只反映「最近一次」，历史上「ok 但没投出去」的静默失败会被漏掉。
+        # 实测（2026-10-27）：daily-reflection 有 2 次 ok-but-not-delivered
+        # （10-26 00:35、10-21 04:27），另有 40 次历史 error —— lastRun 看起来全绿。
+        job_id = j.get("id") or j.get("jobId")
+        if mode == "announce" and job_id:
+            runs = _load_history(env, job_id)
+            if runs is None:
+                print(f"WARN {name} 历史投递状态读取失败（无法判断，非失败）")
+                continue
+            undelivered = [
+                r for r in runs
+                if r.get("status") == "ok" and r.get("delivered") is False
+            ]
+            if undelivered:
+                ts = []
+                for r in undelivered[:5]:
+                    ms = r.get("runAtMs")
+                    ts.append(
+                        datetime.datetime.fromtimestamp(ms / 1000).strftime("%m-%d %H:%M")
+                        if isinstance(ms, (int, float)) else "?"
+                    )
+                # 最近一次仍是坏的 → FAIL；历史遗留但最近已好 → WARN
+                if runs and runs[0].get("status") == "ok" and runs[0].get("delivered") is False:
+                    print(
+                        f"FAIL {name} 最近一次运行未投递！"
+                        f"（历史 {len(undelivered)}/{len(runs)} 次未投递）"
+                    )
+                    failed += 1
+                else:
+                    print(
+                        f"WARN {name} 历史上有 {len(undelivered)}/{len(runs)} 次"
+                        f"「运行成功但未投递」（最近一次正常）：{', '.join(ts)}"
+                    )
+            else:
+                recent_errors = sum(1 for r in runs if r.get("status") == "error")
+                if recent_errors:
+                    print(
+                        f"WARN {name} 最近 {len(runs)} 次里有 {recent_errors} 次 error"
+                        f"（最近一次正常）"
+                    )
+                else:
+                    print(f"PASS {name} 历史投递均正常（近 {len(runs)} 次）")
 
     # 供 shell 统计失败数
     print(f"__FAILED__={failed}")
