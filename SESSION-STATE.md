@@ -24,7 +24,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 21 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=62 FAIL=3 WARN=1
+**巡检现状**: 21 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=61 FAIL=4 WARN=1
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
