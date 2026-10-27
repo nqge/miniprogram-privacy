@@ -96,9 +96,6 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - Every 15 minutes: check context, memory, teahouse
 - Proactive thinking: "What could help my human right now?"
 - Document and improve continuously
-- Don't run destructive commands without asking.
-- `trash` > `rm` (recoverable beats gone forever)
-- When in doubt, ask.
 
 ## External vs Internal
 
