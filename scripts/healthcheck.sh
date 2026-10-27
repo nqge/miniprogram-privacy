@@ -1052,13 +1052,24 @@ echo "【V】会话里的长 poll（指令说了但没照做的信号）"
 # 它不阻止 agent 用长 poll，但能在我验收时立刻发现「又犯了」，
 # 而不是等到某个任务撞上超时才察觉。
 #
-# 判据：最近 3 天的会话里，process(poll) 的 timeout > 60000ms 的次数 > 5 → WARN
+# 判据（2026-10-27 10:20 改进）：**只看最近 12 小时**。
+#
+# 原判据是「最近 3 天累计 > 5 次 → WARN」—— 有两个毛病：
+#   1. **稀释**：3 天里 1 天严重违规 + 2 天干净，累计数照样很大，
+#      看起来像「天天在犯」，但昨天已经改好了
+#   2. **历史噪音**：TOOLS.md 那条规则 2026-10-27 09:50 才写，
+#      10-25/10-26 的长 poll 属于「规则还不存在」，
+#      算进去只会让真违规淹没在历史里
+#
+# → 改成：**最近 12 小时内**的长 poll > 3 次 → WARN（历史存量单独报出，不参与判定）
+# 这样它回答的是真正该问的问题：**「我此刻还在犯吗？」**
 
 poll_report=$(python3 - << 'PY9' 2>/dev/null
-import glob, json, os, time, collections
+import glob, json, os, time, collections, datetime
 SESS = '/root/.openclaw/agents/main/sessions'
-cutoff = time.time() - 3 * 86400
+cutoff = time.time() - 12 * 3600
 long_polls = collections.Counter()
+recent_polls = collections.Counter()
 total_polls = 0
 try:
     files = [f for f in glob.glob(f'{SESS}/*.jsonl') if os.path.getmtime(f) > cutoff]
@@ -1094,13 +1105,32 @@ for f in files:
                     continue
                 if t > 60000:
                     long_polls[os.path.basename(f)[:8]] += 1
+                    # 判定只看最近 12 小时：按 toolCall 自己的时间戳算，
+                    # 不能用文件 mtime（同一会话文件一直在被追加）
+                    ts = d.get('timestamp') or m.get('timestamp') or ''
+                    if ts:
+                        try:
+                            tt = datetime.datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                            if tt.timestamp() > cutoff:
+                                recent_polls[os.path.basename(f)[:8]] += 1
+                        except Exception:
+                            pass
     except Exception:
         continue
 
-if long_polls:
-    detail = ', '.join(f"{k}×{v}" for k, v in long_polls.most_common(5))
-    print(f"WARN 最近 3 天有 {sum(long_polls.values())} 次长 poll（timeout>60s）：{detail}"
+if recent_polls:
+    n = sum(recent_polls.values())
+    detail = ', '.join(f"{k}×{v}" for k, v in recent_polls.most_common(5))
+    hist = sum(long_polls.values()) - n
+    extra = f"（另有 {hist} 次属 12 小时前的历史存量，不参与判定）" if hist > 0 else ""
+    print(f"WARN 最近 12 小时有 {n} 次长 poll（timeout>60s）：{detail}{extra}"
           f" —— poll 会等满 timeout，是 E35「任务超时≠任务慢」的成因")
+    print(f"WARN 修法：TOOLS.md「等长任务」一节 —— 等后台进程用 "
+          f"process(poll, timeout=10000)，每次最多 10~15 秒；"
+          f"超过 2 分钟的任务改用 sessions_spawn（推送式完成，不轮询）")
+elif long_polls:
+    n = sum(long_polls.values())
+    print(f"PASS 最近 12 小时无长 poll（12 小时前有 {n} 次历史存量，不参与判定）")
 else:
     print(f"PASS 会话里没有长 poll（共 {total_polls} 次 poll，全部 ≤60s）")
 PY9
