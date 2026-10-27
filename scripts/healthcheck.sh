@@ -1575,6 +1575,87 @@ while IFS= read -r line; do
 done <<< "$poll_report"
 PASS=$((PASS + 1))
 
+echo "【Y】外部 API 的响应延迟(不只是能不能通)"
+
+# 2026-10-27 14:20 补：
+# 【A】组只查「能不能通」(timeout 15s)，**不查「有多慢」** ——
+# 一个「能通但很慢」的外部 API 会被判定为健康，
+# 而实际上它会吃掉依赖它的任务的 timeout 预算。
+#
+# 真实场景：teahouse_monitor.py 的 `_get(url, timeout=90, retries=3)`
+# → 一次请求最坏 **270 秒**。如果 GitHub 变慢(不是挂，是慢)，
+# teahouse-monitor(timeout 600s) 会只剩 1-2 次请求的余量。
+#
+# 判据(用真实延迟，不是「通不通」)：
+#   1) 延迟 > 15s → FAIL(慢到会拖累依赖任务)
+#   2) 延迟 > 5s  → WARN(能通但慢，依赖它的任务会吃 timeout 预算)
+
+y_lat_out=$(python3 - << 'PYB' 2>/dev/null
+import json, time, urllib.request
+
+def probe(name, url, method="GET", headers=None):
+    body = b"{}" if method == "POST" else None
+    h = {"Content-Type": "application/json"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, data=body, headers=h, method=method)
+    t0 = time.time()
+    try:
+        urllib.request.urlopen(req, timeout=20)
+        return name, time.time() - t0, None
+    except Exception as e:
+        code = getattr(e, 'code', None)
+        # 4xx = 服务在应答（认证问题），仍算「通」
+        if code and 400 <= int(code) < 500:
+            return name, time.time() - t0, None
+        return name, time.time() - t0, type(e).__name__
+
+probes = [
+    probe("GitHub", "https://api.github.com/repos/ythx-101/openclaw-qa/issues?per_page=5"),
+    probe("嵌入代理", "http://127.0.0.1:8799/health"),
+]
+try:
+    cfg = json.load(open('/root/.openclaw/openclaw.json', encoding='utf-8'))
+    fs = cfg.get('channels', {}).get('feishu', {})
+    tok = fs.get('appSecret') or fs.get('appId') or ''
+    probes.insert(0, probe("飞书",
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        "POST", {"Authorization": f"Bearer {tok}"}))
+except Exception:
+    pass
+
+failed = 0
+warned = 0
+ok_lines = []
+for name, dt, err in probes:
+    if err:
+        print(f"FAIL {name} 不可达({err}，耗时 {dt:.1f}s)")
+        failed = 1
+    elif dt > 15:
+        print(f"FAIL {name} 响应 {dt:.1f}s —— 慢到会拖累依赖它的任务")
+        failed = 1
+    elif dt > 5:
+        print(f"WARN {name} 响应 {dt:.1f}s —— 能通但慢，依赖它的任务会吃 timeout 预算")
+        warned = 1
+    else:
+        ok_lines.append(f"{name} {dt:.2f}s")
+
+if ok_lines and not failed:
+    print("PASS 外部 API 延迟正常(" + ", ".join(ok_lines) + ")")
+print(f"__Y_FAILED__={failed}")
+PYB
+)
+y_fail=$(echo "$y_lat_out" | grep -oP '__Y_FAILED__=\K[0-9]+')
+y_fail=${y_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$y_lat_out"
+PASS=$((PASS + 1))
+
 echo "【X】巡检脚本自己的解析器自检(防断言装死)"
 
 # 2026-10-27 13:40 补(E49)：
