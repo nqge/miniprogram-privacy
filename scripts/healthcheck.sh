@@ -838,7 +838,7 @@ echo "【S】连续性入口的「当前状态」是否过期"
 # 现在「系统状态」由 scripts/gen_system_status.py 从真实系统生成。
 # 这里核对：**声明的内容与真实系统是否一致**。
 
-st_report=$(python3 - << 'PY6' 2>/dev/null
+st_report=$(python3 - << 'PY6'
 import json, os, re, subprocess
 WS = '/root/.openclaw/workspace'
 STATE = f'{WS}/SESSION-STATE.md'
@@ -895,12 +895,41 @@ for gone in ('glmcode', 'arkcode', 'kimicode', 'teahouse-check', 'dream-cycle-v3
     if gone in sec:
         problems.append(f"系统状态小节里还有已删除的「{gone}」")
 
+# 4) 「巡检现状」行必须**唯一**（2026-10-27 08:20 加）
+#    update_state_status.py 原来靠「找一行长得像活行」来定位，
+#    但它自己又会把其它同名前缀的行改成「（快照）」——
+#    活行找不到时 fallback 到 insert() -> **每次巡检多插一行**，
+#    累积到 13 行才被发现。
+#    现在改用 BEGIN/END 标记块；这里断言「标记块只有 1 个，
+#    且块外的散落行为 0」-> 防止复发。
+_b = txt.count('<!-- BEGIN:gen_healthcheck_status -->')
+_e = txt.count('<!-- END:gen_healthcheck_status -->')
+if _b != 1 or _e != 1:
+    problems.append(f"巡检现状标记块数量异常（BEGIN={_b} END={_e}，应为各 1）")
+else:
+    _inblock = False
+    _stray = 0
+    for _ln in txt.split(chr(10)):
+        if _ln.strip() == '<!-- BEGIN:gen_healthcheck_status -->':
+            _inblock = True
+            continue
+        if _ln.strip() == '<!-- END:gen_healthcheck_status -->':
+            _inblock = False
+            continue
+        if _inblock:
+            continue
+        if _ln.startswith('**巡检现状'):
+            _stray += 1
+    if _stray:
+        problems.append(f"标记块外还有 {_stray} 行散落的「巡检现状」—— 每次巡检都在自增")
+
 if problems:
     for p in problems:
         print(f"FAIL {p}")
     failed = 1
 else:
     print("PASS 连续性入口的当前状态与真实系统一致")
+
 print(f"__ST_FAILED__={failed}")
 PY6
 )
@@ -929,7 +958,7 @@ echo "【R】cron 任务「脚本耗时 vs 超时」对比（防把等待慢当�
 #   1) 脚本耗时 < 5s 但 job 因超时失败 → FAIL（等待方式的问题，不是任务的问题）
 #   2) timeoutSeconds < 脚本耗时的 10 倍 → WARN（余量太小）
 
-to_report=$(python3 - << 'PY5' 2>/dev/null
+to_report=$(python3 - << 'PY5'
 import json, os, subprocess, time
 JOBS = '/root/.openclaw/cron/jobs.json'
 WS = '/root/.openclaw/workspace'
@@ -999,7 +1028,8 @@ if tos_map:
         print(f"PASS cron 超时余量合理（{lo}s–{hi}s）")
 print(f"__TO_FAILED__={failed}")
 PY5
-)to_fail=$(echo "$to_report" | grep -oP '__TO_FAILED__=\K[0-9]+')
+)
+to_fail=$(echo "$to_report" | grep -oP '__TO_FAILED__=\K[0-9]+')
 to_fail=${to_fail:-0}
 while IFS= read -r line; do
   case "$line" in

@@ -39,34 +39,73 @@ def main() -> int:
     if not STATE.exists():
         return 0
     groups = count_groups()
-    newline = (
-        f"**巡检现状**: {groups} 组断言，每日 07:00 自动运行 + 飞书告警"
-        f"｜PASS={p} FAIL={f} WARN={w}"
-    )
     try:
         lines = STATE.read_text(encoding="utf-8").split("\n")
-        live_idx = None
-        for i, ln in enumerate(lines):
-            if ln.startswith("**巡检现状**:") and "每日 07:00 自动运行" in ln:
-                live_idx = i
-                break
-        if live_idx is None:
-            # 没有「活」的行了 —— 找第一处并改造成活行
-            for i, ln in enumerate(lines):
-                if ln.startswith("**巡检现状**:"):
-                    lines[i] = newline
-                    live_idx = i
+        # 2026-10-27 08:20 修（自增行 bug）：
+        # 原来靠「找一行以 **巡检现状**: 开头且含『每日 07:00 自动运行』的」来定位活行，
+        # 但脚本自己又会把所有**其它**同名前缀的行改成「（快照）」——
+        # 于是活行越来越少 → 某次找不到 → `lines.insert(3, newline)`
+        # → **每次巡检都多插一行**，重复累积到 13 行。
+        #
+        # 根因：**没有稳定的锚点**，活行的身份靠「长得像不像活行」来推断。
+        # 修法：用**显式标记**（BEGIN/END 注释块）——就像 gen_system_status.py 那样，
+        # 标记永远在、内容永远被替换，不会漂移也不会重复。
+        NEWLINE = (
+            "**巡检现状**: " + f"{groups} 组断言，每日 07:00 自动运行 + 飞书告警"
+            f"｜PASS={p} FAIL={f} WARN={w}"
+        )
+        begin = "<!-- BEGIN:gen_healthcheck_status -->"
+        end = "<!-- END:gen_healthcheck_status -->"
+
+        out = []
+        i = 0
+        replaced = False
+        while i < len(lines):
+            ln = lines[i]
+            if ln.strip() == begin:
+                # 跳过整个旧块，插入新块
+                j = i
+                while j < len(lines) and lines[j].strip() != end:
+                    j += 1
+                out.append(begin)
+                out.append(NEWLINE)
+                out.append(end)
+                i = j + 1
+                replaced = True
+                continue
+            out.append(ln)
+            i += 1
+
+        if not replaced:
+            # 第一次写：插到标题分隔线之后
+            insert_at = 0
+            for k, ln in enumerate(out):
+                if ln.strip() == "---":
+                    insert_at = k + 1
                     break
-        if live_idx is None:
-            lines.insert(3, newline)
-        else:
-            lines[live_idx] = newline
-        # 历史条目里若还残留同名前缀的行，改成「快照」形式，避免看起来是活的
-        for i, ln in enumerate(lines):
-            if i != live_idx and ln.startswith("**巡检现状**:"):
-                lines[i] = ln.replace("**巡检现状**:", "**巡检现状（快照）**:", 1)
-        STATE.write_text("\n".join(lines), encoding="utf-8")
-        print(f"[state-status] 已更新：{newline}")
+            else:
+                insert_at = 3
+            out[insert_at:insert_at] = [begin, NEWLINE, end]
+
+        # 清理**遗留**的旧格式行（没有标记的散落行）——只留标记块里那一行
+        cleaned = []
+        in_block = False
+        for ln in out:
+            if ln.strip() == begin:
+                in_block = True
+                cleaned.append(ln); continue
+            if ln.strip() == end:
+                in_block = False
+                cleaned.append(ln); continue
+            if in_block:
+                cleaned.append(ln); continue
+            # 块外的旧格式行：丢掉
+            if ln.startswith("**巡检现状"): 
+                continue
+            cleaned.append(ln)
+
+        STATE.write_text("\n".join(cleaned), encoding="utf-8")
+        print(f"[state-status] 已更新：{NEWLINE}")
     except Exception as e:
         print(f"[state-status] 更新失败（忽略）: {e}")
     return 0
