@@ -1040,6 +1040,79 @@ while IFS= read -r line; do
 done <<< "$to_report"
 PASS=$((PASS + 1))
 
+echo "【V】会话里的长 poll（指令说了但没照做的信号）"
+
+# 2026-10-27 09:50 补：E35 之后我给 3 条 cron 指令加了「【等待方式】」说明，
+# 但 09:00 的 daily-learning **还是用了 4 次 120s/150s 的 poll**（实测 772s）。
+#
+# → **指令写了 ≠ 会照做**（E31 的老问题：别把正确性寄托在「记得做」上）。
+# TOOLS.md 里已经加了全局规则（每个会话都加载），但那也是「说明」不是「约束」。
+#
+# 这条断言的价值：**让违规可见**。
+# 它不阻止 agent 用长 poll，但能在我验收时立刻发现「又犯了」，
+# 而不是等到某个任务撞上超时才察觉。
+#
+# 判据：最近 3 天的会话里，process(poll) 的 timeout > 60000ms 的次数 > 5 → WARN
+
+poll_report=$(python3 - << 'PY9' 2>/dev/null
+import glob, json, os, time, collections
+SESS = '/root/.openclaw/agents/main/sessions'
+cutoff = time.time() - 3 * 86400
+long_polls = collections.Counter()
+total_polls = 0
+try:
+    files = [f for f in glob.glob(f'{SESS}/*.jsonl') if os.path.getmtime(f) > cutoff]
+except Exception:
+    files = []
+
+for f in files:
+    try:
+        for line in open(f, encoding='utf-8', errors='replace'):
+            if '"toolCall"' not in line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            m = d.get('message') or {}
+            c = m.get('content')
+            if not isinstance(c, list):
+                continue
+            for x in c:
+                if not isinstance(x, dict) or x.get('type') != 'toolCall':
+                    continue
+                if x.get('name') != 'process':
+                    continue
+                a = x.get('arguments') or {}
+                if a.get('action') != 'poll':
+                    continue
+                total_polls += 1
+                t = a.get('timeout') or 0
+                try:
+                    t = int(t)
+                except Exception:
+                    continue
+                if t > 60000:
+                    long_polls[os.path.basename(f)[:8]] += 1
+    except Exception:
+        continue
+
+if long_polls:
+    detail = ', '.join(f"{k}×{v}" for k, v in long_polls.most_common(5))
+    print(f"WARN 最近 3 天有 {sum(long_polls.values())} 次长 poll（timeout>60s）：{detail}"
+          f" —— poll 会等满 timeout，是 E35「任务超时≠任务慢」的成因")
+else:
+    print(f"PASS 会话里没有长 poll（共 {total_polls} 次 poll，全部 ≤60s）")
+PY9
+)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$poll_report"
+PASS=$((PASS + 1))
+
 echo "【U】cron 实测耗时 vs 超时余量（防明天早上撞超时）"
 
 # 2026-10-27 07:10 补：
