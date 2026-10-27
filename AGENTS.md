@@ -8,16 +8,11 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 
 ## Every Session
 
-> **⏱️ 等长任务的两条铁律**（2026-10-27 实测，加在 E35/E41/E50 之后）
-> 1. **别用长 poll 等**：`process(action='poll', timeout=120000~300000)` 会**等满整个
->    timeout**，哪怕进程早就结束了。正确做法：`exec(yieldMs=10000)` 转后台，
->    然后 `process(action='poll', timeout=10000)` 每 10 秒查一次。
-> 2. **别跑不属于自己的活**：每日巡检是 07:00 那个 cron 的职责。
->    要确认 L1 库 → 只跑 `scripts/verify_l1_retrieval.py`（有缓存，约 67s）。
->    真要跑长任务 → `sessions_spawn(runtime='subagent')`（推送式完成，不用轮询）。
->
-> 这不是风格问题：实测一轮心跳里我自己产生了 **148 次长 poll**，
-> 其中 61% 在等一个**本来不该由我跑**的脚本。
+> **⏱️ 等长任务两条铁律**（E35/E41/E50）
+> 1. **别用长 poll 等** —— `poll(timeout=120000+)` 会等满 timeout。
+>    用 `exec(yieldMs=10000)` + `poll(timeout=10000)` 每 10 秒查一次。
+> 2. **别跑不属于自己的活** —— 每日巡检归 07:00 的 cron；查 L1 库只跑
+>    `scripts/verify_l1_retrieval.py`；要跑长任务用 `sessions_spawn`。
 
 Before doing anything else:
 

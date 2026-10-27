@@ -1805,6 +1805,65 @@ while IFS= read -r line; do
 done <<< "$y_lat_out"
 PASS=$((PASS + 1))
 
+echo "【Z】压缩后重注入的上下文预算（防红线被截掉）"
+
+# 2026-10-27 16:30 补：压缩后会重新注入 AGENTS.md 的指定小节，
+# 源码里 `MAX_CONTEXT_CHARS = 3000`，且是 **拼起来再截断**：
+#   const combined = sections.join("\n\n")...
+#   combined.slice(0, MAX_CONTEXT_CHARS)
+# → **超限时，被截掉的是后面的**。
+# 而 legacy 默认注入的是 ['Every Session', 'Safety'] —— **Safety（红线）在后面**！
+# → 一旦前面的小节写太长，**红线会被静默截掉**，而 agent 不会知道。
+#
+# 今晚实测：加了 487 字符的「等长任务」规则后，两节合计 2494 / 3000
+# → 只剩 506 字符余量，任何人再加几行就可能把红线挤掉。
+# 现已压缩到 2274 / 3000（余量 726）。
+#
+# 判据：两节合计 > 2400（80%）→ WARN；> 2800（93%）→ FAIL
+
+z_budget=$(python3 - << 'PYZ' 2>/dev/null
+import re
+AGENTS = '/root/.openclaw/workspace/AGENTS.md'
+MAX = 3000          # 源码里的 MAX_CONTEXT_CHARS
+LEGACY = ['Every Session', 'Safety']
+try:
+    s = open(AGENTS, encoding='utf-8').read()
+except Exception as e:
+    print(f"FAIL 读不到 AGENTS.md（{type(e).__name__}）")
+    raise SystemExit(1)
+
+def extract(name):
+    m = re.search(rf'^##\s+{re.escape(name)}\s*$(.*?)(?=^##\s|\Z)',
+                  s, re.M | re.S)
+    return m.group(0) if m else ""
+
+sections = [extract(n) for n in LEGACY]
+sizes = {n: len(t) for n, t in zip(LEGACY, sections)}
+total = sum(sizes.values())
+
+if not all(sections):
+    print("WARN 找不到 legacy 注入小节（Session Startup/Red Lines 或 Every Session/Safety）")
+    print(f"     当前: {sizes} → 若配置改过，注入行为可能已变，需重新核对")
+elif total > MAX * 0.93:
+    print(f"FAIL 压缩重注入的上下文已用 {total}/{MAX} 字符（{total*100//MAX}%）"
+          f" —— **后面的 Safety 红线会被截掉**")
+elif total > MAX * 0.80:
+    print(f"WARN 压缩重注入的上下文已用 {total}/{MAX} 字符（{total*100//MAX}%）"
+          f" —— 余量不多，再加要小心把红线挤掉")
+else:
+    detail = ", ".join(f"{k}={v}" for k, v in sizes.items())
+    print(f"PASS 压缩重注入预算充足（{total}/{MAX} 字符，余量 {MAX-total}；{detail}）")
+PYZ
+)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$z_budget"
+PASS=$((PASS + 1))
+
 echo "【X】巡检脚本自己的解析器自检(防断言装死)"
 
 # 2026-10-27 13:40 补(E49)：
