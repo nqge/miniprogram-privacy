@@ -1467,6 +1467,52 @@ problems = []
 if lib_n != n_files:
     problems.append(f"主库 {lib_n} 条 vs 独立文件 {n_files} 个")
 
+# 2026-10-27 11:50 补：**重号 / 编号撞车**检测。
+# 【O】原来只能发现「数量对不上」，发现不了「**编号撞了但数量刚好对**」——
+# 2026-10-27 我和并行会话同时新建 E42.md → 互相覆盖，
+# 文件数 45→46 数量是对的，但**并行会话那条 E42 被顶掉了**（内容丢失）。
+# → 三件事要查：
+#   ① 独立文件的**标题编号** vs 文件名编号（不一致 = 被顶过）
+#   ② 主库里的重号（`### E42` 出现两次）
+#   ③ 独立文件之间的重号（两个文件都叫 E42 的标题）
+import collections as _c
+
+title_of = {}
+for f in files:
+    try:
+        head = open(f, encoding="utf-8").read(400)
+    except Exception:
+        continue
+    mt = re.search(r"^### (E\d+)", head, re.M)
+    if mt:
+        title_of[os.path.basename(f)] = mt.group(1)
+
+mismatch = []
+for fname, tid in title_of.items():
+    fid = fname[:-3]
+    if tid != fid:
+        mismatch.append(f"{fname} 的标题写的是 {tid}")
+if mismatch:
+    problems.append(f"独立文件标题编号与文件名不一致（可能被别的会话顶过）：{'; '.join(mismatch[:3])}")
+
+dup_lib = [k for k, v in _c.Counter(re.findall(r"^### (E\d+)", lib, re.M)).items() if v > 1]
+if dup_lib:
+    problems.append(f"主库里有重号条目：{dup_lib}")
+
+dup_files = [k for k, v in _c.Counter(title_of.values()).items() if v > 1]
+if dup_files:
+    problems.append(f"多个独立文件用了同一个编号：{dup_files}")
+
+# 编号连续性（有缺号 = 可能有条目被删了或从没建文件）
+try:
+    all_ids = set(int(x) for x in re.findall(r"^### E(\d+)", lib, re.M))
+    if all_ids:
+        gaps = [i for i in range(1, max(all_ids) + 1) if i not in all_ids]
+        if gaps:
+            problems.append(f"L1 编号有缺号：{gaps[:6]}（可能有条目被删了或没建独立文件）")
+except Exception:
+    pass
+
 # MEMORY.md 里的声明
 try:
     mem = open(MEM, encoding='utf-8').read()
