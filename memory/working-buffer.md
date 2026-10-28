@@ -1,137 +1,48 @@
-# Working Buffer - 2026-10-27
+# Working Buffer - 2026-10-28
 
-> ⚠️ 本文件是**当前轮**的工作缓冲区。上一轮（10-26）的记录在 git 历史里
+> ⚠️ 本文件是**当前轮**的工作缓冲区。上一轮（10-27）的记录在 git 历史里
 > （`git log -p memory/working-buffer.md`）。别在这里堆积历史 —— 那是今日笔记的活。
 
-## 📍 当前状态（2026-10-27 05:00）
+## 📍 当前状态（2026-10-28 19:30）
 
-**系统**：19 组断言 A–S 全绿（PASS=58 FAIL=3，3 项全是长期项）· cron 5 条全 ok · 错误 0
-**记忆**：L1 36 条（E1–E36，36/36 可检索）· 索引 233 块 · 今日笔记 20K
-**git**：108 次提交，工作区干净，远端落后 0
+**系统**：26 组断言全绿（PASS=72 FAIL=1，1 项长期项）· cron 5 条全 ok · 今日错误 0
+**记忆**：L1 **52** 条（E1–E52，52/52 可检索）· 索引 **485** 块 / 69 文件 · `Dirty: no` · `Embeddings: ready`
+**git**：工作区干净（仅 `memory/teahouse_state.json` 为 teahouse-monitor 自身运行态）
+**代理**：embed-proxy `active` · 实调返回 1536 维向量 · 日志 226KB/天（噪音已根治，原 26MB）
 
-## ✅ 本轮已完成
+## ✅ 10-28 本轮已完成
 
-1. **E28 失败项分类** —— 长期项 vs 可处理，退出码只看可处理项
-2. **E29 断言阈值重新设计** —— 第一版 25% 是假警报，废弃
-3. **E30+E31 茶馆队列** —— 加出队机制 + 巡检自愈（不再靠 agent 记得做）
-4. **E32+【O】** —— L1 计数一致性自动核对
-5. **E33+【P】** —— 跨零点写错文件（已拆分 10-26/10-27）
-6. **E34+【Q】** —— cron 指令清单从脚本生成 + 自动核对
-7. **E35+【R】** —— backup-audit 超时的真根因是「等法」不是「任务慢」
-8. **E36+【S】** —— SESSION-STATE 头部的当前状态改为自动生成
+1. **memory 检索链路全链验证** —— 代理 health / 实调 embedding / `--deep` 索引 / 端到端 search 四层全通过
+2. **10-27 17:01 `insufficient balance` 事故定性** —— MiniMax 余额耗尽（非代理故障），已自恢复，未复现
+3. **healthcheck【E】凭证断言口径修正** —— 只有「被 git 跟踪」或「权限宽于 600」才判 FAIL
+   （本地 600 未跟踪 = 安全基线）→ FAIL 3→1，PASS 60→72
+4. **daily-learning 超时修复验证** —— 772s → **512s**（上限 1800s），trim 脚本生效
+5. **E52 事实错误更正** —— 「趋势判定缺失」是错的，`d2fedcb` 起已实现且两���都报了 WARN
+6. **体检盲区修复（本日最重要）** —— provider 有**两层配置**，
+   `openclaw.json`（全局）与 `agents/main/agent/models.json`（agent 级，merge 下叠加）。
+   体检脚本只读全局 → 4 个失效 provider 长期不可见 → SESSION-STATE 写成「已删除」→ 下个会话会跳过
+   → 已修【M】组 + `gen_system_status.py` + 更正 SESSION-STATE
 
-## ⚠️ 残留项（3 项长期项，都需牛哥哥本人操作）
+## ⚠️ 残留项（都需牛哥哥本人操作）
 
-- **PAT 吊销重签**（`GIT_CREDENTIALS.md` 2 个 + `gh hosts.yml` 1 个）—— classic PAT 带
-  `admin:org` / `delete_repo` / `admin:enterprise`，≈ 账号控制权
-- **第二个 provider key** —— 现在 fallback 链全在同一 provider（minimax），
-  provider 级故障（欠费/限流/宕机）时兜底无效（【M】组长期盯着）
-- **博客方向** —— `xiaoniu-blog` 停更 7 个月、0 star，建议 B（归档）或 C（只做技术沉淀）
+- **4 个 provider 凭证**（arkcode / glmcode / qwen / kimicode）——
+  实测全部失效（401/403/400/404），但**仍留在 agent 级目录、仍可选中**。
+  需定夺：**充值换新凭证** 还是 **直接清掉**。
+  建议：先充值验证可用 → 加进 `fallbacks` 做真跨 provider 兜底；确认全死则清理。
+- **healthcheck 自身超时预算** —— 耗时 207s→298s→378s（上限 600s），每次 +~80s，
+  外推约 **10-31 撞线**。4 条候选对策（减 LLM 调用 / 改确定性判断 / 调高 timeout / 拆轻重两组）。
+- **PAT 吊销重签**（沿用项）
+- **博客方向**（沿用项）
 
-## 🔍 下一轮候选（按 ROI 排序）
+## 🔍 今日沉淀的可复用教训
 
-1. **第二个 provider** —— 一旦牛哥哥给了 key，【M】组就能转 PASS，
-   而且 provider 级故障时真有兜底（现在没有）
-2. **daily-learning 的 362s** —— 逼近 420s timeout，下次慢一点就超时。
-   同一类问题（等法），可复用 E35 的「短 poll」方案
-3. **巡检跑两遍的机制** —— 【R】实测脚本时会**再跑一次**脚本（为了对比耗时），
-   虽然有 `subprocess.run(timeout=120)` 保护，但会让巡检自身变慢
+1. **一个系统有两层配置时，「已删除」先问「删的是哪一层」** —— 本地文件删了 ≠ 全局生效
+2. **体检脚本的输入范围 = 它的盲区边界**
+3. **默认输出 ≠ 完整目录** —— `openclaw models list` 默认只显示带 default/fallback 标签的，
+   `--all` 才看得到全貌；**用默认输出下结论 = 漏掉 15 个模型**
+4. **「已了结」是最危险的结论** —— 它让下个会话直接跳过；「仍待处理」只是多花一次确认成本
+5. **断言「某机制缺失」前先 grep 实现 + 看真实输出** —— 「我打算加」≠「它已经在跑」
+6. **日志 `grep -c "error"` 的计数毫无意义** —— 70% 是我自己写的分析文本被匹配到，必须归类
+7. **诊断配置时只打印结构不打印 key** —— 今天自曝过一次 minimax apiKey 到日志
+8. **看到「已删除/已修复」先 stat 一下相关文件 mtime**
 
-
-
-## ✅ 本轮已修复（2026-10-26 00:30-00:45）
-
-### 1. 模型回退链断裂 → cron 双任务全线 error
-- **症状**：`daily-reflection` error — `All models failed (2): minimax/MiniMax-M3 rate_limit | kimicode/kimi-kimi-for-coding HTTP 403 auth_permanent`
-- **根因（逐层实测，不是猜）**：
-  - `minimax` provider 全部 3 个模型（MiniMax-M3 / M2.7 / M2.7-highspeed）**实测 200 OK**（anthropic-messages 接口），只是当时撞了限流
-  - `kimicode` — endpoint `https://api.kimi.com/coding/v1` + `/v1/messages` → **404**；模型名 `kimi-kimi-for-coding` 也是错的（实际 id 是 `kimi-for-coding`），且订阅已失效
-  - `glmcode` — `https://open.bigmodel.cn/api/anthropic` → **401 身份验证失败**（key 过期），**注意**：直连返回 HTML 而非 JSON，容易被误判成 200
-  - `arkcode` — `https://ark.cn-beijing.volces.com/api/coding` → 所有列出的模型均 **404 UnsupportedModel**（coding plan 不覆盖），`ark-code-latest` 返回 500
-- **修复**：`agents.defaults.model.fallbacks` 从 `[kimicode/kimi-kimi-for-coding]` 改为
-  `[minimax/MiniMax-M2.7-highspeed, minimax/MiniMax-M2.7]`（同 provider 互为备份，实测均 200）
-- **备份**：`~/.openclaw/openclaw.json.bak-20261026`，权限保持 600
-- **验证**：手动 `cron run` 两个任务 → 均 `status: ok` ✅
-
-### 2. 茶馆监控停更 ≈166 天 → 已复活
-- **症状**：`memory/teahouse_state.json` 最后更新 2026-04-29，脚本用 GraphQL `node_id` 去重，但抓取路径已切到 REST API，ID 格式不一致 → 全量漏判
-- **修复**：新写 `scripts/teahouse_monitor.py`（统一用 REST 整数 issue id + number 双主键，兼容旧 node_id；带 3 次重试防 IncompleteRead）
-- **成果**：一次性捞回 **95 条历史讨论**，摘要写入 `memory/teahouse_summary_2026-10-26_0040.md`
-- **调度**：新增 cron `teahouse-monitor`，每 4 小时（`0 */4 * * *` @ Asia/Shanghai），isolated + no-deliver（只做内部分习，不外发）
-
-## ⚠️ 残留项
-
-### 已确认失效的凭证（等牛哥哥决策，未擅自改）
-- `glmcode` API key（49 位，`d4334718...`）→ 401 过期
-- `arkcode` 订阅 → 所有模型 UnsupportedModel
-- `kimicode` → 订阅失效 + 模型名配置错误
-
-### 老问题（未动）
-- `plugins.entries.qqbot` / `ddingtalk` 残留配置 → 每次 CLI 刷屏 cosmetic 警告
-- 配置哈希基线（`.config-baseline.sha256`）从未落地
-- 磁盘 75%（29G/40G），日志目录已自愈
-
-### 待牛哥哥决策（积压 6+ 周）
-1. glmcode / arkcode / kimicode 三个 provider 凭证是否续费或从配置移除
-2. qqbot / ddingtalk 残留配置是否清理
-3. 是否补建配置哈希基线
-4. `daily-learning` 频率是否从每周一改回每日（学习笔记 10-24/10-25 两天完全缺失，周频零容错）
-5. 是否把 `daily-reflection` 也改回每日
-
-## 状态
-- 上下文: 4%（健康）
-- 牛哥哥: 凌晨睡眠时段，全程未外发任何消息
-- 模式: heartbeat only，无 outbound
-
----
-
-## ✅ 灾备推送已恢复（2026-10-26 01:15）
-
-**状态**: `origin/master` = `f9437d9` = 本地 HEAD，已同步 ✅
-
-**根因（3 层叠加，不是网络问题）**:
-1. 分支名：远端是 `master` 不是 `main`
-2. `url.https://github.com/.insteadof` 把 SSH 重写回 HTTPS → "认证成功但 443 超时"
-3. GitHub secret scanning 真拦截：`GIT_CREDENTIALS.md` 含真实 PAT（commit aad5ffd 引入）
-
-**已完成**:
-- 重写历史清除密钥（rebase --onto），9 个待推 commit 全部验证无凭证文件
-- 远端确认无 `GIT_CREDENTIALS.md`
-- 清除 URL rewrite，remote 改回 SSH
-- `.gitignore` 排除凭证文件 / openclaw.json / 4 个 gitlink 目录
-- 4 个缺 `.gitmodules` 的 gitlink 清理完毕
-
-## ⚠️ 需牛哥哥处理（安全）
-`GIT_CREDENTIALS.md` 里的 2 个 PAT 建议**吊销重签**：
-- 从未推送（远端干净），但本地明文保存半年
-- secret scanning 已识别，格式为有效 PAT
-- 未擅自吊销（会破坏现有工作流）
-
-## ✅ 灾备完整性已补齐（2026-10-26 01:30）
-- 远端现已含：AGENTS / SOUL / USER / IDENTITY / MEMORY / TOOLS / HEARTBEAT / SESSION-STATE + memory/ + scripts/ + skills/
-- 配置哈希基线已落地（6+ 周待办之一完成）
-- 遗留：memory/2026-10-19.md、2026-10-20.md 本地也没有（当时只写进 SESSION-STATE）
-
-## ✅ 02:25 补充
-- `proactive-tracker.md` 已重建并入库（HEARTBEAT 依赖项，此前丢失）
-- `scripts/backup_audit.sh` 已上线 + cron `backup-audit`（每日 03:00），当前 PASS=19 FAIL=0 WARN=0
-- 5 项待决策已整理为 `待决策选项单.md`，含我的建议与 A/B/C 选项
-
-## ✅ 03:45 补充
-- 日志膨胀根因已除（33910 条同源警告 = 10-23 那次的同一根因，当时只降级未根除）
-- `plugins.installs` 补全（source:'path'）+ gateway restart 生效 → **CLI 告警全清**
-- 5 插件全部 loaded；skillhub CLI 实测可搜索
-- `scripts/log_cleanup.sh` 日志轮转兜底已上线
-
-## ✅ 04:15 补充
-- 日志清理脚本从未被调度 → 已补 cron `log-cleanup`（每日 04:30）
-- log_cleanup.sh 的 mtime 判龄规则永不触发（轮转按大小不按天）→ 重写为槽位日期判龄
-- `/tmp/openclaw` 77M → 2.5M（删 4 个僵尸槽位 + 剥离 33911 行历史残留）
-- 提交推送 `90371ef`
-
-## ✅ 09:10 补充
-- **记忆检索从「完全不可用」恢复到可用**（之前从 2026-03 起就是死的，只是没人验证）
-- 新增 `tools/minimax_embed_proxy.mjs` + systemd service `openclaw-embed-proxy.service`
-- 新增 `scripts/tune_memory_search.py`（参数扫描）
-- 茶馆摘要改写到 `teahouse-raw/`（不再污染索引），加保留 5 份的清理
-- memorySearch: chunking.tokens=200, minScore=0.08, hybrid 0.75/0.25
