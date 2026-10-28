@@ -47,10 +47,10 @@
 > ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。
 
 **cron 任务**:
-- `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (151s)
-- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (146s)
-- `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (378s)
+- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (97s)
 - `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (513s)
+- `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (119s)
+- `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (135s)
 - `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: ok (30s)
 
 **plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw
