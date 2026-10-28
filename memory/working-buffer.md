@@ -8,7 +8,7 @@
 **系统**：26 组断言全绿（PASS=72 FAIL=1，1 项长期项）· cron 5 条全 ok · 今日错误 0
 **记忆**：L1 **52** 条（E1–E52，52/52 可检索）· 索引 **485** 块 / 69 文件 · `Dirty: no` · `Embeddings: ready`
 **git**：工作区干净（仅 `memory/teahouse_state.json` 为 teahouse-monitor 自身运行态）
-**代理**：embed-proxy `active` · 实调返回 1536 维向量 · 日志 226KB/天（噪音已根治，原 26MB）
+**代理**：embed-proxy `active` · 实调返回 1536 维向量 · 日志 ~0.3MB/天（噪音已根治，原 26MB；此数字随时间变，看趋势别看绝对值）
 
 ## ✅ 10-28 本轮已完成
 
