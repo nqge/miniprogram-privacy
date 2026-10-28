@@ -47,8 +47,8 @@
 > ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。
 
 **cron 任务**:
-- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (98s)
 - `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (151s)
+- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (146s)
 - `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (378s)
 - `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (513s)
 - `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: ok (30s)
@@ -402,3 +402,40 @@
 - 【U】趋势 WARN 仍在（207→298→378s，10-31 前后可能撞 600s）→ **下一步要真 profile**，
   而不是再改 CLI 调用（已证明收益有限）
 - healthcheck 总耗时 97s，离 600s 还有余量，但**趋势没解决**
+
+### 2026-10-29 00:30 补记 — 体检提速的真瓶颈不在 CLI（E54）
+
+**修正我自己的一个错误判断**：以为 21s 的 PY8（CLI 调用）是最大头，
+**profile 后发现真瓶颈是 `verify_l1_retrieval.py` 的 77 秒**。
+→ **「先 profile 再优化」** 这条教训本轮又被我自己违反了半次
+
+**根因**：每次 `openclaw memory search` 要起一个 Node 进程
+- 实测 CLI **4.85s/次**，embedding 只要 **0.36s** → 差值全是 Node 启动 + 插件注册
+- 17 条经验 → 17 次 → **78 秒**
+
+**否决的方案**：**并行 4 路 = 86.9s，比串行 78.4s 还慢**（2 核机并发只抢 CPU）
+→ 与 TOOLS.md 里「8 并发零加速、18 个慢 3 倍」的既有记录**一致**
+
+**落地的两个新脚本**（都有等价性自检）：
+| 脚本 | 作用 | 自检 |
+|---|---|---|
+| `scripts/memory_batch_search.mjs` | 一次 Node 进程跑完所有检索 | `--self-test` 逐条比对 path+score |
+| `scripts/cron_runs_helper.py` | 直读 `cron/runs/*.jsonl` | `self_test()` 逐字段比对 |
+
+**实测收益**：
+| 项 | 前 | 后 |
+|---|---|---|
+| `verify_l1_retrieval.py` | 77s | **10.2s** |
+| `healthcheck.sh` 全量 | 103s | **54.3s** |
+
+**故障注入**：移走 `memory_batch_search.mjs` → 自动回落逐条 CLI（91s），
+结果仍是 **52/52**，**没有静默失效** ✅
+
+**踩过的 4 个坑**（都写进 proactive-tracker 了）：
+1. 打包后 export 名被压成单字母（`n`/`r`/`t`）→ 不能靠名字猜
+2. `new URL('file://' + 绝对路径)` 把路径当 host → "Cannot find package 'undefined'"
+3. `pathToFileUrl()` 返回字符串，再 `.href` → `undefined` → 同一个诡异报错
+4. 遍历导入 dist 下所有 .js → 触发 CLI 副作用 + **dump core**
+
+**新增技能点**：`openclaw` 的 memory search manager 可以**在同一个 Node 进程里复用**，
+不必走 CLI —— 这是把 4.85s/次压到接近 0 的关键。
