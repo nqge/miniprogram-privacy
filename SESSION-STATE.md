@@ -24,7 +24,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=71 FAIL=4 WARN=6
+**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=71 FAIL=1 WARN=7
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -345,3 +345,60 @@
   → E52 在主库出现**两次**（1729/1733）→ 已删。**新增条目时必须复核主库只有一份**
 
 **未落地（等定夺）**: 【U】组加趋势判定（最近 3 次单调递增且涨幅 >50% → WARN）
+
+### 2026-10-29 00:00 心跳 — 灾备缺口 + 【S】误报修正 + 体检提速（E53）
+
+**起因**: 心跳巡检顺手跑 `scripts/backup_audit.sh`（0.16s）→ **FAIL=1**
+
+### 1) 灾备缺口（真问题，已修）
+- **13 个 commit 未推送**（10-28 白天/晚间的工作）→ 已核实无凭证 → 已 push
+  → `88c4865..1ab3062`，**双向 `git rev-list --count` = 0/0** 验证（不信 "Everything up-to-date"）
+- 复跑审计 → **PASS=19 FAIL=0 WARN=0**
+- **关键矛盾**：10-28 03:00 那次 cron 报「all PASS (PASS=19)」，我手跑却是 FAIL=1
+  → 因为「全绿」是**当时**的快照，之后又产生了新 commit
+  → **「上次全绿」≠「现在还好」**（第三次撞上「状态字段 ≠ 用户得到的结果」）
+
+### 2) 翻出被吞掉的 3 次超时
+查 `openclaw cron runs --id 480555ac...`：
+| 时间 | duration | status |
+|---|---|---|
+| 10-27 00:00 | 300071ms | error: job execution timed out |
+| 10-27 00:45 | 600021ms | error: job execution timed out |
+| 10-27 01:00 | 600015ms | error: job execution timed out |
+| 10-28 03:00 | 151153ms | ok |
+**脚本本身只要 0.164s** → 超时 100% 来自**长 poll**（E35/E50 第三次实测确认）
+
+### 3) 【S】组 3 个假 FAIL（误报，判据本身坏了）
+- **现象**: 生成器如实输出「agent 级目录另有 provider: arkcode, glmcode, qwen, kimicode」
+  → 【S】第 3 项对整节做**裸子串匹配** → 把「如实报告残留凭证」误判成「残留了已删除的东西」
+- **修法**（按作用域拆开，不是放宽断言）:
+  - provider 名 → 只在 `**providers**:` 行查（那是 primary 列表，必须等于真实配置）
+  - 「agent 级目录另有 provider」行 → **允许**出现这些名字（那是有意报告）
+  - cron/plugin 已删除名 → 仍全节查（没有「有意报告」的场景）
+  - **新增 3c**: 该行的名单必须与真实 agent 级目录的 **extra** 算出来的一致
+- **注入验证（4 用例全对）**: 真实状态→PASS / glmcode 塞 primary→FAIL / qqbot 塞 plugins→FAIL / 名单过期→FAIL
+- **语义坑**: 生成器列的是 **extra**（agent 有、全局没有），不是 agent 全部
+  → 比对时也要先算 extra，否则又把「全量」和「增量」搞混（我第一次就踩了）
+
+### 4) 体检提速（【U】组 WARN：healthcheck 63% 余量，207→298→378s）
+- **profiling 25 个 python 块** → 瓶颈是 **PY8（21s）**：它在**循环里**调
+  `openclaw cron runs`（每次拉起一个 Node 进程，**~4s/次**）
+- **修法**: 新增 `scripts/cron_runs_helper.py` → **直接读 `/root/.openclaw/cron/runs/*.jsonl`**
+  （运行历史本来就是 JSONL-backed，CLI help 明说）
+  → 5 个 job × 2 处 = 10 次 CLI → **0 次**
+- **必须有自检**（否则断言装死）: `self_test()` 逐字段比对 JSONL 与 CLI
+  （ts/status/durationMs/sessionId）→ PASS
+- ⚠️ **实测总耗时 103s → 97s（收益远小于预期）**
+  → **瓶颈不只是 CLI**：还有 L1 检索验证等固定成本
+  → **教训：先 profile 再优化，不要凭直觉改**（我差点宣称「优化了 30%」，实际只有 6%）
+
+### 5) 自己犯了 E33（跨日写入）
+- 我把 10-29 的内容写进了 `memory/2026-10-28.md` —— **正是我自己在 E33 里写过的规则**
+- 被【P】组当场抓出来（这个断言值了）
+- 已把两段内容迁到 `memory/2026-10-29.md`
+- **教训**: 规则写进 cron 指令 ≠ 我在会话里会遵守 —— **E33 也需要【P】这种自动断言兜底**
+
+### 残留项
+- 【U】趋势 WARN 仍在（207→298→378s，10-31 前后可能撞 600s）→ **下一步要真 profile**，
+  而不是再改 CLI 调用（已证明收益有限）
+- healthcheck 总耗时 97s，离 600s 还有余量，但**趋势没解决**

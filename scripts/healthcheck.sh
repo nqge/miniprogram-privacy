@@ -997,10 +997,57 @@ except Exception:
     pass
 
 # 3) 不该再有已删除实体的残留提及
-for gone in ('glmcode', 'arkcode', 'kimicode', 'teahouse-check', 'dream-cycle-v3',
-             'qqbot', 'ddingtalk'):
+#
+# 2026-10-29 修正(误报): 原来对整节做裸子串匹配。
+# 但 10-28 的修复(aac5e44)刻意让生成器输出
+# 「**agent 级目录另有 provider**: arkcode, glmcode, qwen, kimicode」
+# —— 那是**真实存在**的残留凭证目录,必须让人看见(体检盲区,见【M】组)。
+# 裸子串匹配把「如实报告残留」误判成「残留了已删除的东西」-> 3 个假 FAIL。
+#
+# 现在按**作用域**拆开:
+#   - provider 名只在「**providers**: ...」那一行里查(它必须等于真实配置)
+#   - 「agent 级目录另有 provider」那一行**允许**出现这些名字(那是有意报告)
+#   - cron/plugin 的已删除名仍然全节查(它们没有任何「有意报告」的场景)
+GONE_PROVIDERS = ('glmcode', 'arkcode', 'kimicode')
+GONE_ENTITIES = ('teahouse-check', 'dream-cycle-v3', 'qqbot', 'ddingtalk')
+
+# 3a) provider: 只看 primary providers 行(检查 1 已比对了声明 vs 真实)
+pm = re.search(r'^\*\*providers\*\*: ([^\n]+)$', sec, re.M)
+if pm:
+    primary_line = pm.group(1)
+    for gone in GONE_PROVIDERS:
+        if gone in primary_line:
+            problems.append(f"primary providers 里还有已删除的「{gone}」")
+
+# 3b) cron/plugin: 全节查
+for gone in GONE_ENTITIES:
     if gone in sec:
         problems.append(f"系统状态小节里还有已删除的「{gone}」")
+
+# 3c) 「agent 级目录另有 provider」行必须与真实情况一致
+#     —— 这一行是 10-28 加的盲区提示,它是「如实报告」,不能是硬编码的旧名单
+#
+#     语义要与生成器一致:它列的是 **agent 级目录里有、但全局配置里没有** 的 provider
+#     (即 `extra`),不是 agent 级目录的全部。所以比对时也要先算 extra。
+try:
+    ap = os.path.join(os.path.expanduser('~'), '.openclaw', 'agents',
+                       'main', 'agent', 'models.json')
+    if os.path.exists(ap):
+        ac = json.load(open(ap, encoding='utf-8'))
+        real_agent = set((ac.get('providers') or {}).keys())
+        gc = json.load(open('/root/.openclaw/openclaw.json', encoding='utf-8'))
+        global_ps = set((gc.get('models', {}).get('providers') or {}).keys())
+        real_extra = {p for p in real_agent if p not in global_ps}
+        am = re.search(r'^\*\*agent 级目录另有 provider\*\*: ([^\n]+)$', sec, re.M)
+        if am:
+            decl_agent = {x.strip().split('（')[0].strip()
+                          for x in am.group(1).split(',') if x.strip()}
+            if decl_agent != real_extra:
+                problems.append(
+                    f"agent 级额外 provider 声明 {sorted(decl_agent)},"
+                    f"实际 {sorted(real_extra)}")
+except Exception:
+    pass
 
 # 4) 「巡检现状」行必须**唯一**(2026-10-27 08:20 加)
 #    update_state_status.py 原来靠「找一行长得像活行」来定位,
@@ -1390,6 +1437,9 @@ def isolated_sessions():
     sess_job_map = {}
     job_has_rule = {}
     try:
+        # 2026-10-29: 读运行历史改成直接读 JSONL（绕开 Node 进程启动，~4s→~0.04s）
+        sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+        from cron_runs_helper import read_cron_runs
         r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
                            capture_output=True, text=True, timeout=60)
         raw = r.stdout or ''
@@ -1401,7 +1451,7 @@ def isolated_sessions():
             r2 = subprocess.run(['openclaw', 'cron', 'runs', '--id', j['id'], '--limit', '20'],
                                  capture_output=True, text=True, timeout=60)
             try:
-                for e in (json.loads(r2.stdout) or {}).get('entries', []):
+                for e in read_cron_runs(j['id'], 20):
                     sid8 = (e.get('sessionId') or '')[:8]
                     if sid8:
                         ids.add(sid8)
@@ -2008,7 +2058,7 @@ echo "【U】cron 实测耗时 vs 超时余量(防明天早上撞超时)"
 #   3) 有任务最近失败且原因是超时 → FAIL
 
 u_report=$(python3 - << 'PY8' 2>/dev/null
-import json, subprocess, os, glob
+import json, subprocess, os, glob, sys
 
 failed = 0
 warned = 0
@@ -2030,14 +2080,18 @@ for j in jobs:
 
 # 从各任务的 session/运行记录里找实测耗时
 def durations(name):
-    """从 openclaw 的 cron 运行历史里取该任务的最近耗时(ms)"""
+    """从 openclaw 的 cron 运行历史里取该任务的最近耗时(ms)
+
+    2026-10-29: 改成直接读 JSONL（`cron_runs_helper`）。
+    原来每次都调 `openclaw cron runs`（~4s Node 启动），本块被调 5 次 → 21s。
+    现在 5 次加起来 ~0.1s。**关键：必须与 CLI 返回等价**，否则断言会装死
+    —— helper 里有 self_test() 校验字段一致。
+    """
     out = []
     try:
-        r = subprocess.run(['openclaw', 'cron', 'runs', '--limit', '8',
-                            '--id', CRON_ID_FOR[name]],
-                           capture_output=True, text=True, timeout=60)
-        d = json.loads(r.stdout[r.stdout.find('{'):])
-        for e in d.get('entries', []):
+        sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+        from cron_runs_helper import read_cron_runs
+        for e in read_cron_runs(CRON_ID_FOR[name], 8):
             dur = e.get('durationMs')
             ts = e.get('runAtMs') or e.get('ts') or 0
             if dur:

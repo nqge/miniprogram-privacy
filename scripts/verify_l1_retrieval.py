@@ -97,7 +97,11 @@ def main():
     env = dict(os.environ)
     env.setdefault("OPENCLAW_LOG_LEVEL", "warn")
 
-    def _search(q):
+    # 批量检索结果缓存（_check_one 里通过闭包访问）
+    _BATCH_RESULTS = {}
+
+    def _search_cli(q):
+        """单次 CLI 检索（fallback 用）"""
         r = subprocess.run(
             ["openclaw", "memory", "search", q, "--json"],
             capture_output=True, text=True, timeout=120, env=env,
@@ -106,6 +110,46 @@ def main():
             return json.loads(r.stdout[r.stdout.find("{"):]).get("results", [])
         except Exception:
             return []
+
+    # 2026-10-29 加：批量检索 —— 一个 Node 进程跑完所有查询。
+    # 原来每条经验要起一次 `openclaw memory search`（**~4.6s/次**），
+    # 17 条 ≈ **78 秒**，占 healthcheck 的 80%，逼近 600s 超时。
+    # 改成 scripts/memory_batch_search.mjs：**一次启动，复用同一个 manager** → ~8s。
+    # ⚠️ 实测**并行更慢**（4 路并行 86.9s vs 串行 78.4s）—— 2 核机上并发只抢 CPU。
+    _BATCH_CACHE = {}
+
+    def _batch_search(queries):
+        """批量检索 → {query: results}。失败则回落到逐条 CLI。"""
+        if not queries:
+            return {}
+        todo = [q for q in dict.fromkeys(queries) if q not in _BATCH_CACHE]
+        if todo:
+            try:
+                proc = subprocess.run(
+                    ["node", "/root/.openclaw/workspace/scripts/memory_batch_search.mjs"],
+                    input=json.dumps({"queries": todo, "maxResults": TOP_N}),
+                    capture_output=True, text=True, timeout=300, env=env,
+                )
+                raw = proc.stdout.strip()
+                data = json.loads(raw[raw.find("{"):]) if raw else {}
+                for q in todo:
+                    v = data.get(q)
+                    _BATCH_CACHE[q] = v if isinstance(v, list) else None
+            except Exception:
+                for q in todo:
+                    _BATCH_CACHE[q] = None
+        out = {}
+        for q in queries:
+            v = _BATCH_CACHE.get(q)
+            out[q] = v if isinstance(v, list) else _search_cli(q)
+        return out
+
+    def _search(q):
+        """单条检索（优先用批量结果）"""
+        if q in _BATCH_CACHE:
+            v = _BATCH_CACHE[q]
+            return v if isinstance(v, list) else _search_cli(q)
+        return _search_cli(q)
 
     def _check_one(f):
         """返回 (eid, q, status, detail)。status ∈ {pass, retry_pass, fail, nokw}"""
@@ -155,14 +199,24 @@ def main():
         def _hit(rs):
             return any(f"L1-entries/{eid}.md" in x.get("path", "") for x in rs[:TOP_N])
 
-        for qi in queries:
-            rs = _search(qi)
-            if _hit(rs):
-                return (eid, qi, "pass", rs[0] if verbose else None)
-        # 索引未稳时重试（见 RETRY_ON_MISS 注释）
+        def _evaluate(queries, cached):
+            """用已缓存的结果评估；全 miss 才回落到逐条 CLI 重试。"""
+            for qi in queries:
+                rs = cached.get(qi)
+                if rs is None:
+                    rs = _search_cli(qi)
+                if _hit(rs):
+                    return (eid, qi, "pass", rs[0] if verbose else None)
+            return None
+
+        cached = _BATCH_RESULTS
+        r = _evaluate(queries, cached)
+        if r:
+            return r
+        # 索引未稳时重试（见 RETRY_ON_MISS 注释）—— 逐条走 CLI
         for _ in range(RETRY_ON_MISS):
             for qi in queries:
-                rs = _search(qi)
+                rs = _search_cli(qi)
                 if _hit(rs):
                     return (eid, qi, "retry_pass", None)
         return (eid, q, "fail",
@@ -215,6 +269,30 @@ def main():
 
     results = []
     if todo:
+        # ── 第 2.5 步：先把所有条目要用的措辞收齐，一次性批量检索 ──
+        #    （2026-10-29 加：原来每条经验起一个 Node 进程 → 78s）
+        all_q = []
+        for f in todo:
+            s_ = open(f, encoding="utf-8").read()
+            m_ = re.search(r"本条讲：\*\*(.+?)\*\*", s_)
+            if not m_:
+                continue
+            qq = m_.group(1).strip()
+            if len(qq) > 60:
+                cut = qq[:60]
+                if " " in cut:
+                    cut = cut[:cut.rfind(" ")]
+                qq = cut
+            all_q.append(qq)
+            tm_ = re.search(r"^###\s*E\d+[：:]\s*(.+)$", s_, re.M)
+            if tm_:
+                t_ = tm_.group(1).strip()
+                if t_ and t_ != qq:
+                    all_q.append(t_)
+        _BATCH_RESULTS.update(_batch_search(all_q))
+        print(f"  ℹ️  批量检索 {len(set(all_q))} 种措辞"
+              f"（一次 Node 进程，避免每条起一次）")
+
         with ThreadPoolExecutor(max_workers=SEARCH_WORKERS) as ex:
             for r in ex.map(_check_one, todo):
                 results.append(r)
