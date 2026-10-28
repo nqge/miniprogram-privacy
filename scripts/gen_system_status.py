@@ -34,6 +34,26 @@ def read_config():
     return json.load(open(CONFIG, encoding='utf-8'))
 
 
+AGENT_MODELS = Path('/root/.openclaw/agents/main/agent/models.json')
+
+
+def read_agent_catalog():
+    """读取 agent 级模型目录（models.json）。
+
+    2026-10-28 补：`openclaw.json` 的 `models.providers` 只是**全局**配置；
+    agent 级目录 `agents/<id>/agent/models.json` 会在 `models.mode=merge` 下
+    **叠加**到最终目录上，而 `openclaw models list` 的默认输出只看
+    default/fallback 标签 —— 于是「本地配置里有、运行时也能选中、
+    但体检脚本看不见」的 provider 会成为盲区
+    （当时 glmcode/arkcode/kimicode 三家就是这样被漏掉的）。
+    """
+    try:
+        d = json.load(open(AGENT_MODELS, encoding='utf-8'))
+        return list((d.get('providers') or {}).keys())
+    except Exception:
+        return []
+
+
 def read_jobs():
     r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
                        capture_output=True, text=True, timeout=60)
@@ -54,6 +74,19 @@ def build():
     L.append('> 改配置后重跑 `python3 scripts/gen_system_status.py --update`。')
     L.append('')
     L.append(f'**providers**: {", ".join(c["models"]["providers"].keys())}')
+
+    # agent 级目录里的 provider（可能与全局不一致 —— 这就是盲区）
+    agent_ps = read_agent_catalog()
+    global_ps = list(c["models"]["providers"].keys())
+    extra = [p for p in agent_ps if p not in global_ps]
+    if extra:
+        L.append('')
+        L.append(f'**agent 级目录另有 provider**: {", ".join(extra)}'
+                 f'（来自 `agents/main/agent/models.json`，在 `models.mode=merge` 下会叠加进最终目录）')
+        L.append('')
+        L.append('> ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；'
+                 '若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，'
+                 '需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。')
     L.append('')
     L.append('**cron 任务**:')
     for j in jobs:

@@ -1,7 +1,7 @@
 # SESSION-STATE.md
 
-**最后更新**: 2026-10-28 07:05
-**状态**: ✅ 全系统已修复并实证（每日自动巡检，见下方「巡检现状」）。glmcode/arkcode/kimicode 三个失效 provider 已删除（不再是待决策项）。
+**最后更新**: 2026-10-28 11:45
+**状态**: ✅ 全系统已修复并实证（每日自动巡检，见下方「巡检现状」）。**更正（2026-10-28 11:4x）**：此前写「glmcode/arkcode/kimicode 三个失效 provider 已删除」**只对 `openclaw.json` 成立**——它们仍完整存在于 agent 级目录 `agents/main/agent/models.json`，在 `models.mode=merge` 下会叠加进最终目录，`openclaw models list --all` 里 15 个模型仍可选中，但实测凭证全部失效（401/403/400/404）。**该决策项仍然有效**，不是「已删除」。已修 `gen_system_status.py` 让体检脚本能看见这类残留 provider。
 
 > ## 📌 2026-10-26 这一天的核心（下次会话先读这段）
 >
@@ -24,7 +24,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=72 FAIL=1 WARN=5
+**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=71 FAIL=4 WARN=6
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -42,11 +42,15 @@
 
 **providers**: minimax
 
+**agent 级目录另有 provider**: arkcode, glmcode, qwen, kimicode（来自 `agents/main/agent/models.json`，在 `models.mode=merge` 下会叠加进最终目录）
+
+> ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。
+
 **cron 任务**:
-- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (185s)
-- `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (47s)
-- `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (298s)
-- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (772s)
+- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (98s)
+- `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (151s)
+- `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (378s)
+- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (513s)
 - `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: ok (30s)
 
 **plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw

@@ -2403,7 +2403,25 @@ except Exception as e:
 providers = list(c.get('models', {}).get('providers', {}).keys())
 fallbacks = c.get('agents', {}).get('defaults', {}).get('model', {}).get('fallbacks', []) or []
 
+# 2026-10-28 补：agent 级目录 providers/main/agent/models.json 在 models.mode=merge 下
+# **叠加**进最终目录 —— 只读 openclaw.json 会漏掉「本地有、运行时能选中、但凭证已失效」
+# 的残留 provider（当时 glmcode/arkcode/kimicode 就这样被漏掉，SESSION-STATE 还写成「已删除」）。
+AGENT_MODELS = '/root/.openclaw/agents/main/agent/models.json'
+agent_providers = []
+try:
+    am = json.load(open(AGENT_MODELS, encoding='utf-8'))
+    agent_providers = list((am.get('providers') or {}).keys())
+except Exception:
+    pass
+
 print(f"PASS 已配置 provider: {len(providers)} 个 → {', '.join(providers) if providers else '无'}")
+
+extra = [p for p in agent_providers if p not in providers]
+if extra:
+    print(f"WARN agent 级目录另有 {len(extra)} 个 provider: {', '.join(extra)}"
+          f"(models.json 叠加进最终目录,不参与 primary/fallbacks 路由)")
+    print(f"INFO 若这些 provider 凭证已失效,属**残留凭证** —— 需人工确认后清理或充值;"
+          f"只信 openclaw.json 的 provider 列表会漏掉它们")
 print(f"PASS fallback 链: {len(fallbacks)} 项 → {', '.join(fallbacks) if fallbacks else '未配置'}")
 
 if not fallbacks:
