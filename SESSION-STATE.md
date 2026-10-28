@@ -24,7 +24,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=71 FAIL=1 WARN=7
+**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=72 FAIL=1 WARN=6
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -59,6 +59,16 @@
 ## 📝 心跳记录
 
 > 详细历史见 `memory/session-state-archive.md`（2026-10-27 拆分，git 里也有完整版本）
+
+### 2026-10-29 00:35 心跳 — 全项现场复核，系统处于「无待处理项」状态
+**做法**: 全部**当场重跑**（不引用 cron 快照，遵守 E53）
+- git 双向 `rev-list --count` = **0/0**，工作区干净
+- `backup_audit.sh` → PASS=19 FAIL=0 WARN=0（0.11s）
+- `healthcheck.sh` → **PASS=72 FAIL=1 WARN=6，55.5s**（优化前 103s）
+- 嵌入代理 `/health` ok + systemd active；10-29 槽位 embedding 错误计数 **0**
+  （10-27 那条 `insufficient balance` 已自行恢复，非当前故障）
+- cron 5 个任务全 ok；茶馆 last_check=00:02Z（00:03 cron 已覆盖）；无待发告警
+**结论**: 唯一 FAIL 是【M】provider fallback 那条长期项 —— 等牛哥哥决策，不自己动。
 
 ### 2026-10-27 07:00 心跳 — 单 provider 的第二重后果（并发互相拖慢）
 **起因**: daily-learning 362s/420s → 查到一次单次 LLM 调用等了 **353 秒**
