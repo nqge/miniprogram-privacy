@@ -289,7 +289,12 @@ while IFS= read -r line; do
   esac
 done <<< "$cron_out"
 
-PASS=$((PASS + 6 - cron_fail))
+# 【D】组的 PASS 计数：之前是**硬编码 6**（`PASS + 6 - cron_fail`），
+# 那是 2026-10-26 手写的快照值 —— 断言数一变它就悄悄错了，且没人看得见。
+# 2026-10-29 改成**按实际输出的 PASS 行数计**，从源头消除「常数过期」这类漂移。
+cron_pass_count=$(printf '%s\n' "$cron_out" | grep -c '^PASS')
+cron_pass_count=${cron_pass_count:-0}
+PASS=$((PASS + cron_pass_count - cron_fail))
 
 # ── E. 凭证暴露面 ─────────────────────────────────
 echo ""
