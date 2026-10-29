@@ -24,7 +24,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=72 FAIL=1 WARN=6
+**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=75 FAIL=1 WARN=5
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -47,10 +47,10 @@
 > ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。
 
 **cron 任务**:
-- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (97s)
-- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (513s)
+- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (7s)
 - `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (119s)
 - `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (135s)
+- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (736s)
 - `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: ok (30s)
 
 **plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw

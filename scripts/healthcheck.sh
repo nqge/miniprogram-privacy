@@ -2040,6 +2040,28 @@ else
 fi
 PASS=$((PASS + 1))
 
+echo "【W2】cron 投递判据单测(E55：本该发什么)"
+
+# 2026-10-29 10:xx 补:
+# 【D】组原来只按 delivery.mode 分组, mode 内**没再往下分** →
+# 「无内容所以不投递」和「有内容却没送到手上」字段一模一样, 却被当成同一件事。
+# (实测: 10-29 08:00 茶馆 cron delivered=false, 实际是「新增 0 条」, 投递才是对的)
+#
+# 修法是**加一维**(产出判据), 不是放宽断言。
+# 但加了判据就得防它自己变成「装死的断言」→ 必须有单测 + 故障注入。
+#
+# scripts/test_cron_delivery_output.py **import 真身**(不是抄一份判据)
+# → 判据改了单测立刻跟着变, 物理上无法漂移。
+w2_unit_out=$(python3 scripts/test_cron_delivery_output.py 2>&1)
+if [ $? -eq 0 ]; then
+  w2_unit_cases=$(printf '%s' "$w2_unit_out" | grep -c '^✅')
+  ok "【W2】投递判据单测通过（${w2_unit_cases} 个用例，含混合语义故障注入）"
+else
+  bad "【W2】投递判据单测失败 -- 【D】组的「未投递」判定不可信"
+  printf '%s\n' "$w2_unit_out" | sed 's/^/    /'
+fi
+PASS=$((PASS + 1))
+
 echo "【U】cron 实测耗时 vs 超时余量(防明天早上撞超时)"
 
 # 2026-10-27 07:10 补:
