@@ -98,6 +98,11 @@ def ensure_entry_file(path: Path, eid: str, title: str, kw: str) -> bool:
         lines.insert(insert_at + 1, want_kw_line)
         text = "\n".join(lines)
 
+    # ⚠️ 2026-10-29：标题行与「本条讲」行之间若有空行 → 见 main() 里的踩坑说明。
+    #    统一压成「标题行紧跟本条讲行」，两行之间不空行。
+    text = re.sub(rf"(^###\s*{re.escape(eid)}[：:].*$)\n+(^> 本条讲：\*\*.+?\*\*\s*$)",
+                  r"\1\n\2", text, flags=re.M)
+
     if text != orig:
         path.write_text(text, encoding="utf-8")
         return True
@@ -193,8 +198,17 @@ def main():
         changed.append("独立文件首行")
 
     # 正文（去掉首行格式部分，作为主库条目正文）
-    body = re.sub(rf"^###\s*{re.escape(eid)}[：:].*$\n?^> 本条讲：\*\*.+?\*\*\s*$",
+    # ⚠️ 2026-10-29 实测踩坑：标题行与「本条讲」行之间**可能有空行**。
+    #    原正则要求两者相邻（\n? 只容 0-1 个换行 + 无空行）→ 匹配失败 →
+    #    **标题行残留在 body 里** → 主库出现嵌套 `### E<n>：` →
+    #    下次 sync 的替换正则按「下一个 E\d+ 标题」截断 → **一条变三条**。
+    #    修法：显式允许任意空白；并额外校验 body 里不应再出现同级标题。
+    body = re.sub(rf"^###\s*{re.escape(eid)}[：:].*$\n+\s*^> 本条讲：\*\*.+?\*\*\s*$",
                   "", text, flags=re.M).strip()
+    body = re.sub(rf"^###\s*{re.escape(eid)}[：:].*$\n+", "", text, flags=re.M).strip()
+    if re.search(rf"^###\s*E\d+[：:]", body, re.M):
+        print(f"❌ 正文里仍残留条目标题行，终止（避免主库产生重复条目）")
+        sys.exit(1)
     if sync_main_lib(eid, title, body):
         changed.append("主库条目 + 头部声明")
 
