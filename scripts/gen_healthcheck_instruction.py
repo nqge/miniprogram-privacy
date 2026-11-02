@@ -7,8 +7,11 @@ cron 指令里手写的「13 组断言 A–M」在加了 N/O/P 三组后**没同
 （这正是 E20「验证了脚本却没验证指令」的翻版。）
 
 解法：指令清单**由脚本生成**，不手写。
-- 每次改 healthcheck.sh 后重跑本脚本并用 CLI 更新 cron
-- 或者让 healthcheck.sh 自己在运行时校验指令是否过期
+- 每次改 healthcheck.sh 后重跑本脚本并用 `--update` 更新说明文件
+- healthcheck.sh 自己在运行时校验说明是否过期（【Q】组）
+
+2026-11-02：healthcheck 已从 agentTurn 型 cron 迁到 systemd timer，
+说明文件不再挂在 cron message 上，改由 scripts/healthcheck_prompt.txt 承载。
 
 用法：
   python3 scripts/gen_healthcheck_instruction.py          # 打印生成的清单
@@ -19,7 +22,10 @@ from pathlib import Path
 
 WS = Path('/root/.openclaw/workspace')
 SH = WS / 'scripts/healthcheck.sh'
-CRON_ID = '5415b59e-2d20-44b0-bc4e-1a65501776f4'   # healthcheck
+# 2026-11-02：healthcheck 从 agentTurn 型 cron 迁到 systemd timer，
+# 「给 agent 看的说明」不再挂在 cron message 上，改放这个文件里
+# （心跳读巡检日志时按它解释 FAIL 含义）。
+PROMPT_FILE = WS / 'scripts/healthcheck_prompt.txt'
 
 # 长期项（脚本里会自动归入「等你」组，不触发告警）
 LONG_TERM = {'E', 'M'}
@@ -76,19 +82,17 @@ def build_block(groups):
 
 
 def get_current_msg():
-    r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
-                       capture_output=True, text=True, timeout=60)
-    jobs, _ = json.JSONDecoder().raw_decode(r.stdout[r.stdout.find('['):])
-    for j in jobs:
-        if j.get('id') == CRON_ID:
-            return (j.get('payload') or {}).get('message', '')
-    return None
+    if not PROMPT_FILE.exists():
+        return None
+    return PROMPT_FILE.read_text(encoding='utf-8')
 
 
 def update_cron(new_msg):
-    r = subprocess.run(['openclaw', 'cron', 'edit', CRON_ID, '--message', new_msg],
-                       capture_output=True, text=True, timeout=120)
-    return r.returncode == 0
+    try:
+        PROMPT_FILE.write_text(new_msg, encoding='utf-8')
+        return True
+    except Exception:
+        return False
 
 
 def main():
@@ -97,7 +101,7 @@ def main():
     if '--update' in sys.argv:
         cur = get_current_msg()
         if cur is None:
-            print('找不到 healthcheck cron 任务')
+            print(f'找不到说明文件 {PROMPT_FILE}')
             sys.exit(1)
         # 替换掉旧的「当前 FAIL 的 N 类含义」整块
         start = cur.find('**当前 FAIL 的')

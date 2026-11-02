@@ -64,6 +64,30 @@ def read_jobs():
         return []
 
 
+def read_timers():
+    """读 systemd timer —— 纯脚本任务的家（2026-11-02 起 healthcheck 等都在这里）。
+
+    为什么要在「系统状态」里列出：cron 列表里看不到它们，
+    下一个会话只读这一节的话，会以为这些每日任务已经没人管了。
+    """
+    out = []
+    try:
+        r = subprocess.run(['systemctl', '--user', 'list-timers', '--all', '--no-pager',
+                            '--no-legend'],
+                           capture_output=True, text=True, timeout=30)
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            # 列顺序: NEXT LEFT LAST PASSED UNIT ACTIVATES
+            # —— unit 是**倒数第二列**(最后一列是它激活的 service)，别取 parts[-1]
+            units = [x for x in parts if x.endswith('.timer')]
+            if units:
+                unit = units[0]
+                out.append(f'- `{unit}` — 下次 {" ".join(parts[:4])}')
+    except Exception:
+        pass
+    return out
+
+
 def build():
     c = read_config()
     jobs = read_jobs()
@@ -98,6 +122,10 @@ def build():
         dur = (st.get('lastDurationMs') or 0) / 1000
         L.append(f'- `{j["name"]}` — {sch.get("kind", "")} {expr} · '
                  f'timeout {p.get("timeoutSeconds")}s · last: {last} ({dur:.0f}s)')
+    L.append('')
+    L.append('**systemd timers（纯脚本任务，不消耗模型额度）**:')
+    for line in read_timers():
+        L.append(line)
     L.append('')
     L.append('**plugins**: ' + ', '.join(c.get('plugins', {}).get('entries', {}).keys()))
     L.append('')

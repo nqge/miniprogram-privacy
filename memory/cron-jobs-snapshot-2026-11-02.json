@@ -1,0 +1,190 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "0fd94dba-b8e0-49bf-a62f-15058b211764",
+      "name": "daily-learning",
+      "description": "每天9点执行学习任务",
+      "enabled": true,
+      "createdAtMs": 1778718795121,
+      "updatedAtMs": 1793495025473,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 9 * * *"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "执行每日学习（精简版）：读 memory/ 最近2天日志 + SESSION-STATE.md，写一条学习笔记。\n\n【硬性约束 — 违反即视为失败】\n1. 长度 100-200 **汉字**（不含标题和元信息）。\n\n   ⚠️ **不要靠反复试字数来达标**（2026-10-27 09:00 那次跑了 772s，\n   13 轮「写一版→数一遍→不对→再改」，每次都是一轮完整推理）\n   → 用**确定性脚本**：\n     1. 把草稿写到 /tmp/learn_draft.md\n     2. 跑 `python3 scripts/trim_learning_section.py --from /tmp/learn_draft.md > /tmp/learn_final.md`\n        （脚本会保留「可立即执行的对策」段，删掉信息量最低的铺垫段，按句截断）\n     3. 用 /tmp/learn_final.md 的内容写入目标文件\n     4. 跑 `python3 scripts/trim_learning_section.py --check <文件>` 确认合规（退出码 0）\n   → **1-2 次调用收敛**，不要手写多轮。\n2. 每天只允许有 1 个「📚 每日学习」小节。\n   - 若今天已有 → 在原小节内替换/精炼，不要新开小节\n   - 若原小节已超过 200 字 → 先压缩到 200 字以内再写新的\n3. 不要复述今天已有的学习内容。必须写今天新增的一个认知。\n4. 格式：标题 + 1-3 段 + 一行「可立即执行的对策」（只写 1 条，不要列清单）\n5. 首行重复标题关键词（形如「> 本条讲：**关键词**」）——\n   检索按 token 切块，标题被切到邻块会导致条目检索不到（见 L1 经验库 E17）\n\n【两处写入（已批准的结构）】\n- memory/YYYY-MM-DD.md 的「📚 每日学习」小节 —— 保证时间线可读\n- memory/daily-notes-index.md 追加一个独立段落 —— 保证检索友好\n  （短小节夹在长文档中间会被切碎稀释，独立文件 = 独立块 = 条目自带完整语义）\n两处内容保持一致；不要新建其他文件。\n\n【L1 经验库提升】\n判断今天这条是否属于「可复用方法论」—— 换个场景仍成立 + 能指导具体动作 + 有明确触发条件。\n- 若属于 → 在 memory/L1-experience-library.md 对应分类下新增一条（场景/陷阱/岔路口 三段式），\n  并在今天的小节里注明「已提升至 L1：E<N>」\n- 若不属于 → 不要硬塞进 L1\n- L1 里的旧条目不要删除，除非已被证伪\n- 提升后必须用原文措辞检索一次，确认排进前列；排不进就重写标题与措辞\n\n【自愈要求】\n先检查 memory/ 下最近 3 天的 .md 是否都存在且含「学习」小节：\n- 若有缺失日期 → 补写那一天的（同样 100-200 字，每天只 1 个小节），注明「补记：MM-DD」\n- 不要为补记单独开新小节\n\n【跨日提醒 — 2026-10-27 加（E33）】\n会话可能跨过零点。**写文件前先跑 `date +%F`**，\n用那个日期拼出文件名，**不要用会话开始时记下的日期**：\n- 跨零点后继续往昨天文件里写 → 时间线失真，且 daily-learning「读最近 2 天日志」\n  会读到日期错配的内容，**而且没有任何失败信号**\n- E33 就是这么发生的：10-26.md 里混进了 10-27 的内容（跨日写入）\n\n【等待方式 — 2026-10-27 加（E35）】\n跑超过 10 秒的命令时，用 `exec` 的 `yieldMs` 或**短 timeout** 的 process poll，\n**不要用一次性的长 poll 等满**：\n- ❌ `process(action='poll', timeout=120000~300000)` —— poll 会**等满整个 timeout**\n- ✅ `exec(..., yieldMs=10000)` 转后台，然后 `process(action='poll', timeout=10000)`\n  每 10 秒查一次\n判断标准：**先量脚本耗时**。脚本 1 秒内跑完而 job 却超时，那就是等法的问题。\n\n聚焦：一个值得记住的新知识或教训。不要读大文件。\n\n【别跑不必要的巡检 — 2026-10-27 加（E41）】\n实测：2026-10-27 09:00 那次 daily-learning 花了 **772s**，其中约 **447s**\n是在等 `healthcheck.sh`（171s + 78s + 120s + 78s）——\n而**那不是你的活**：每日巡检由 07:00 的 `healthcheck` cron 负责，\n你自己再跑一遍是「没必要做的长任务」，还把 poll 拖成长等待。\n\n- ❌ 不要自己跑 `scripts/healthcheck.sh`（那是 07:00 cron 的职责）\n- ✅ 需要确认 L1 库状态 → 只跑 `scripts/verify_l1_retrieval.py`\n  （约 67s，且现在有采样，比全量巡检快得多）\n- ✅ 确实要跑长任务 → `sessions_spawn(runtime='subagent')`（推送式完成，不要轮询）\n- ✅ 需要等命令 → `exec(yieldMs=10000)` + 每 10~15 秒短 poll",
+        "thinking": "off",
+        "timeoutSeconds": 1800,
+        "model": "minimax/MiniMax-M3"
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "feishu",
+        "to": "ou_9227741a8ff35fa4e8e83027743dc305",
+        "bestEffort": true
+      },
+      "state": {
+        "nextRunAtMs": 1793581200000,
+        "lastRunAtMs": 1793494800004,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 225469,
+        "lastDeliveryStatus": "unknown",
+        "consecutiveErrors": 3,
+        "lastErrorReason": "rate_limit",
+        "lastError": "Error: All models failed (3): minimax/MiniMax-M3: ⚠️ API rate limit reached. Please try again later. (rate_limit) | minimax/MiniMax-M2.7-highspeed: ⚠️ API rate limit reached. Please try again later. (rate_limit) | minimax/MiniMax-M2.7: ⚠️ API rate limit reached. Please try again later. (rate_limit)"
+      }
+    },
+    {
+      "id": "b7a0aca1-0301-40c3-ac7b-8fdd1f088d67",
+      "name": "daily-reflection",
+      "description": "每天22点每日反思",
+      "enabled": true,
+      "createdAtMs": 1778718811160,
+      "updatedAtMs": 1793541912326,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 22 * * 0"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "每日反思三问（精简版）：1. 今天是否浪费了用户的时间？2. 在哪个决策点提供了关键异议？3. 从用户的决策偏好中学到了什么？直接写入 memory/YYYY-MM-DD.md，不超过500字。不要读 SOUL/USER/IDENTITY 等大文件，只读 memory/ 当天和昨天的日志 + SESSION-STATE.md。\n\n【跨日提醒 — 2026-10-27 加（E33）】\n写 memory/YYYY-MM-DD.md 前，**用 `date +%F` 取当前日期**，不要沿用会话开始时\n算好的路径。跨过零点后仍往昨天文件写，会让「某天的日志」里出现别天的事 ——\n时间线失真，且不产生任何失败信号，只能靠【P】断言事后发现。\n写完确认：文件里的日期和 `date +%F` 一致。",
+        "thinking": "off",
+        "timeoutSeconds": 900,
+        "model": "minimax/MiniMax-M3"
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "feishu",
+        "to": "ou_9227741a8ff35fa4e8e83027743dc305",
+        "bestEffort": true
+      },
+      "state": {
+        "nextRunAtMs": 1794146400000,
+        "lastRunAtMs": 1793541600008,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 312318,
+        "lastDeliveryStatus": "unknown",
+        "consecutiveErrors": 1,
+        "lastError": "Error: All models failed (3): minimax/MiniMax-M3: ⚠️ API rate limit reached. Please try again later. (rate_limit) | minimax/MiniMax-M2.7-highspeed: ⚠️ API rate limit reached. Please try again later. (rate_limit) | minimax/MiniMax-M2.7: ⚠️ API rate limit reached. Please try again later. (rate_limit)",
+        "lastErrorReason": "rate_limit"
+      }
+    },
+    {
+      "id": "3aba97e2-4efd-42f1-b71e-336c98063e1a",
+      "name": "teahouse-monitor",
+      "description": "每 4 小时拉取龙虾茶馆新讨论，去重后生成摘要存入 memory/",
+      "enabled": true,
+      "createdAtMs": 1792946460562,
+      "updatedAtMs": 1793548964900,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 */4 * * *",
+        "tz": "Asia/Shanghai",
+        "staggerMs": 300000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "Execute: python3 /root/.openclaw/workspace/scripts/teahouse_monitor.py && then read the newest /root/.openclaw/workspace/memory/teahouse_summary_*.md and write a 200-word Chinese learning note appended to today's memory/YYYY-MM-DD.md. If the script reports '无新内容', just report that briefly. Do NOT send any external messages — internal learning only.\n\n【蒸馏完必须出队 — 2026-10-27 加】\n蒸馏完成后，把已蒸馏的议题编号标记掉，否则待办队列只加不减，\n每 4 小时都会重复蒸馏同样的内容（E30）：\n  python3 /root/.openclaw/workspace/scripts/teahouse_monitor.py --mark-distilled <编号1,编号2>\n（省略编号参数 = 自动标记队列里所有已蒸馏的条目）\n\n【等待方式 — 2026-10-27 加（E35）】\n跑长脚本时（超过 10 秒），**用 `exec` 的 `yieldMs` 或短 timeout 的 process poll**，\n**不要用一次性的长 poll 等满**：\n- ❌ `process(action='poll', timeout=120000~300000)` —— poll 会**等满整个 timeout**，\n  哪怕结果早就出来了。3 次这样的 poll ≈ 510 秒 → 必然撞上 job 超时，\n  即使脚本本身只要 0.18 秒。\n- ✅ `exec(..., yieldMs=10000)` 让它转后台，然后 `process(action='poll', timeout=10000)`\n  **每 10 秒查一次**，直到进程结束。\n判断标准：**先量脚本耗时**（`time bash xxx.sh`）。如果脚本 1 秒内跑完而 job 却超时，\n那就是等法的问题，不是任务的问题。",
+        "thinking": "off",
+        "timeoutSeconds": 600
+      },
+      "delivery": {
+        "mode": "none",
+        "channel": "last"
+      },
+      "state": {
+        "nextRunAtMs": 1793563236178,
+        "lastRunAtMs": 1793548836183,
+        "lastRunStatus": "ok",
+        "lastStatus": "ok",
+        "lastDurationMs": 128717,
+        "lastDeliveryStatus": "not-delivered",
+        "consecutiveErrors": 0,
+        "lastDelivered": false
+      }
+    },
+    {
+      "id": "480555ac-24af-487b-b18a-224f63129b5e",
+      "name": "backup-audit",
+      "description": "每日灾备完整性审计：核心文件/凭证/同步/哈希基线/权限",
+      "enabled": true,
+      "createdAtMs": 1792952269905,
+      "updatedAtMs": 1793473471403,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 3 * * *",
+        "tz": "Asia/Shanghai"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "Execute: bash /root/.openclaw/workspace/scripts/backup_audit.sh. If the result contains 'FAIL', investigate and fix it, then write findings to /root/.openclaw/workspace/memory/YYYY-MM-DD.md. If all PASS, just note it briefly. Do NOT send external messages — internal only.\n\n【等待方式 — 2026-10-27 加（E35）】\n跑长脚本时（超过 10 秒），**用 `exec` 的 `yieldMs` 或短 timeout 的 process poll**，\n**不要用一次性的长 poll 等满**：\n- ❌ `process(action='poll', timeout=120000~300000)` —— poll 会**等满整个 timeout**，\n  哪怕结果早就出来了。3 次这样的 poll ≈ 510 秒 → 必然撞上 job 超时，\n  即使脚本本身只要 0.18 秒。\n- ✅ `exec(..., yieldMs=10000)` 让它转后台，然后 `process(action='poll', timeout=10000)`\n  **每 10 秒查一次**，直到进程结束。\n判断标准：**先量脚本耗时**（`time bash xxx.sh`）。如果脚本 1 秒内跑完而 job 却超时，\n那就是等法的问题，不是任务的问题。\n\n【跨日提醒 — 2026-10-27 加（E33）】\n写 memory/YYYY-MM-DD.md 前，**用 `date +%F` 取当前日期**，不要沿用会话开始时\n算好的路径。跨过零点后仍往昨天文件写，会让「某天的日志」里出现别天的事 ——\n时间线失真，且不产生任何失败信号，只能靠【P】断言事后发现。\n写完确认：文件里的日期和 `date +%F` 一致。\n\n【别跑不必要的巡检 — 2026-10-27 加（E41）】\n实测：2026-10-27 那次 backup-audit 里有 **3 次 120s 的 poll**，\n等的是 `healthcheck.sh` —— **那不是你的活**：每日巡检由 07:00 的\n`healthcheck` cron 负责。你自己再跑一遍属于「没必要做的长任务」，\n还会把 poll 拖成长等待、挤占 2 核的 CPU（实测 8 并发零加速、18 个慢 3 倍）。\n\n- ❌ 不要自己跑 `scripts/healthcheck.sh`（那是 07:00 cron 的职责）\n- ✅ 只跑属于你自己的那一个脚本（backup-audit.sh 本身只要 0.2 秒）\n- ✅ 确实要跑长任务 → `sessions_spawn(runtime='subagent')`（推送式完成，不要轮询）\n- ✅ 需要等命令 → `exec(yieldMs=10000)` + 每 10~15 秒短 poll",
+        "thinking": "off",
+        "timeoutSeconds": 600
+      },
+      "delivery": {
+        "mode": "none",
+        "channel": "last"
+      },
+      "state": {
+        "nextRunAtMs": 1793559600000,
+        "lastRunAtMs": 1793473200009,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 271394,
+        "lastDeliveryStatus": "not-requested",
+        "consecutiveErrors": 3,
+        "lastErrorReason": "rate_limit",
+        "lastError": "Error: All models failed (3): minimax/MiniMax-M3: ⚠️ API rate limit reached. Please try again later. (rate_limit) | minimax/MiniMax-M2.7-highspeed: ⚠️ API rate limit reached. Please try again later. (rate_limit) | minimax/MiniMax-M2.7: ⚠️ API rate limit reached. Please try again later. (rate_limit)"
+      }
+    },
+    {
+      "id": "5415b59e-2d20-44b0-bc4e-1a65501776f4",
+      "name": "healthcheck",
+      "description": "全链路健康巡检：外部API/服务/记忆索引/定时任务投递四组断言",
+      "enabled": true,
+      "createdAtMs": 1792982637196,
+      "updatedAtMs": 1793487840017,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 7 * * *",
+        "tz": "Asia/Shanghai"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "运行 bash /root/.openclaw/workspace/scripts/healthcheck.sh。\n\n**只在有「可处理失败」时通知**（2026-10-26 新增分类）：\n- 输出末尾会把失败项分成两组：\n  「【可处理 — 现在就该修】」和「【等牛哥哥 — 长期项，不该自己动】」\n- **只有第一组非空才通知**；第二组是长期项（等牛哥哥本人操作），只汇报不告警\n- 若「可处理」组为空 → 一句话汇报「巡检通过 PASS=N，长期项 N 项在等牛哥哥」即可\n- 若「可处理」组非空 → 贴出该组的失败项和原因，并写进 memory/YYYY-MM-DD.md\n\n**当前 FAIL 的 26 类含义**（由 `scripts/gen_healthcheck_instruction.py` 从 healthcheck.sh 自动生成，**不要手写**）：\n（以下是「可处理」类的含义；E 类明文凭证、M 类 provider 韧性属长期项，\n已在脚本里自动归入「等你」组，不触发告警）\n- A 飞书 token / GitHub 额度（认证 5000 次/小时）/ 嵌入代理\n- B gateway / embed-proxy / log-cleanup.timer / quick-health.timer\n- C 索引完整性 + Embeddings 可用\n- D announce 型必须 delivered=True（这是曾经静默失效的环节）\n- E GIT_CREDENTIALS.md / gh hosts.yml（**需牛哥哥本人吊销重签，不要自己改**）\n- F 「每日学习」/「每日反思」小节是否重复（**查全部每日笔记文件**，不只今天 —— 只查重复不查缺失，缺失可能是合法的）\n- G 本地与远端一致\n- H 真实跑一次记忆检索 + API\n- I 茶馆蒸馏进度 + 队列自洽性\n- J L1 经验库活跃度 + 每条经验是否都能被检索到\n- K 根目录整洁度\n- L SESSION-STATE 头部日期\n- M 只有一个 provider 时，fallback 全在同一账号下 → provider 级故障时兜底无效\n- N 单个记忆文件 > 300KB / 索引块垄断 > 60% / memory/ 目录 > 200MB\n- O MEMORY.md 与 L1 主库声明的条目数是否与实际文件数一致\n- P 某个每日笔记里的小节日期晚于文件名（跨零点写错文件）\n- Q cron 指令里的 FAIL 含义清单是否与 healthcheck.sh 的实际组数一致（防过期手册）\n- R cron 任务超时余量：某任务最近因超时失败（脚本 0.2s 但 agent turn 跑了 300s，时间全耗在 LLM 推理）→ 提高该任务 timeoutSeconds；手写的 timeout 值彼此不可比\n- S 连续性入口的「当前状态」是否过期\n- T cron 指令里会写每日笔记/跑长脚本的任务，是否都带了【跨日提醒】和【等待方式】\n- U cron 实测耗时 vs 超时余量：最近一次超过 70% → FAIL；最近 3 次递增且超 50% → WARN（巡检一周长了 11 倍，这个趋势原本没人看得见）\n- V 会话里的长 poll(指令说了但没照做的信号)\n- W 【V】判据自身的单测(防判据本身是坏的)\n- X 巡检脚本自己的解析器自检(防断言装死)\n- Y 外部 API 的响应延迟(不只是能不能通)\n- Z 压缩后重注入的上下文预算（防红线被截掉）\n\n**排查提示**：\n- 静默失败优先排查「触发→执行→落盘→投递」每一段，别只看状态字段\n- 每周 3、6、9、12 会各多一个小节（写入前先看今天有没有）\n- 若 FAIL 项是「明文凭证」类 → 那是**长期项**（等牛哥哥吊销 PAT），\n  不要为了消警告去删凭证文件，那会打断他的工作流\n- 若 FAIL 项是「M Provider 韧性」类 → 也是**长期项**，需要牛哥哥提供第二个 provider 的\n  API key（涉及他的账号和费用，不能自己配）。**只汇报，不要动 openclaw.json**\n\n【等待方式 — 2026-10-27 加（E35）】\n跑长脚本时（超过 10 秒），**用 `exec` 的 `yieldMs` 或短 timeout 的 process poll**，\n**不要用一次性的长 poll 等满**：\n- ❌ `process(action='poll', timeout=120000~300000)` —— poll 会**等满整个 timeout**，\n  哪怕结果早就出来了。3 次这样的 poll ≈ 510 秒 → 必然撞上 job 超时，\n  即使脚本本身只要 0.18 秒。\n- ✅ `exec(..., yieldMs=10000)` 让它转后台，然后 `process(action='poll', timeout=10000)`\n  **每 10 秒查一次**，直到进程结束。\n判断标准：**先量脚本耗时**（`time bash xxx.sh`）。如果脚本 1 秒内跑完而 job 却超时，\n那就是等法的问题，不是任务的问题。\n\n【跨日提醒 — 2026-10-27 加（E33）】\n写 memory/YYYY-MM-DD.md 前，**用 `date +%F` 取当前日期**，不要沿用会话开始时\n算好的路径。跨过零点后仍往昨天文件写，会让「某天的日志」里出现别天的事 ——\n时间线失真，且不产生任何失败信号，只能靠【P】断言事后发现。\n写完确认：文件里的日期和 `date +%F` 一致。\n\n【别跑不必要的重复巡检 — 2026-10-27 加（E41）】\n你就是 07:00 的巡检任务本身。**只跑一次** `scripts/healthcheck.sh`，\n用 `exec(yieldMs=10000)` 转后台，然后**每 10~15 秒短 poll**。\n\n- ❌ 不要用 `process(poll, timeout=120000~300000)` 等满 —— poll 会阻塞满整个 timeout\n  （2026-10-27 实测：一次 120s 的 poll 哪怕进程早就结束了）\n- ❌ 不要重复跑全量巡检（它自己够慢了）\n- ✅ `exec(yieldMs=10000)` → `process(action='poll', timeout=10000)` 循环到结束",
+        "timeoutSeconds": 600
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "feishu",
+        "to": "ou_9227741a8ff35fa4e8e83027743dc305",
+        "bestEffort": true
+      },
+      "state": {
+        "nextRunAtMs": 1793574000000,
+        "lastRunAtMs": 1793487600007,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 240010,
+        "lastDeliveryStatus": "unknown",
+        "consecutiveErrors": 3,
+        "lastErrorReason": "rate_limit",
+        "lastError": "Error: All models failed (3): minimax/MiniMax-M3: ⚠️ API rate limit reached. Please try again later. (rate_limit) | minimax/MiniMax-M2.7-highspeed: ⚠️ API rate limit reached. Please try again later. (rate_limit) | minimax/MiniMax-M2.7: ⚠️ API rate limit reached. Please try again later. (rate_limit)"
+      }
+    }
+  ]
+}

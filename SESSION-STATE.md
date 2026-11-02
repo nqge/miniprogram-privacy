@@ -1,8 +1,20 @@
 # SESSION-STATE.md
 
-**最后更新**: 2026-10-28 11:45
-**状态**: ✅ 全系统已修复并实证（每日自动巡检，见下方「巡检现状」）。**更正（2026-10-28 11:4x）**：此前写「glmcode/arkcode/kimicode 三个失效 provider 已删除」**只对 `openclaw.json` 成立**——它们仍完整存在于 agent 级目录 `agents/main/agent/models.json`，在 `models.mode=merge` 下会叠加进最终目录，`openclaw models list --all` 里 15 个模型仍可选中，但实测凭证全部失效（401/403/400/404）。**该决策项仍然有效**，不是「已删除」。已修 `gen_system_status.py` 让体检脚本能看见这类残留 provider。
+**最后更新**: 2026-11-02 08:50
+**状态**: ✅ **MiniMax 额度已恢复**（2026-11-02 08:45 实测 HTTP 200，0.97s）→ 09:00 的 daily-learning 应能正常跑。仍需牛哥哥决策：充值/升级 Token Plan 或加第二把 key（E39：第二把 key 的价值是拆开共享配额，不是容灾冗余）。fallback 链 2 项全在同一账号下 → provider 级故障时兜底无效（【M】长期项）。
 
+> ## 📌 2026-11-02 今晚的核心（下次会话先读这段）
+>
+> **一句话**：模型额度耗尽 → 「靠模型干活的定时任务」全灭；「不靠模型的」一个没死。
+>
+> - **事实**：429 报错原文「已达到 Token Plan 用量上限」，3 个模型全 429 → fallback 链无效（同账号同额度桶）
+> - **教训**：E8「纯脚本任务不该用 agent 型 cron」早就写下来了，**但没执行** —— 额度一耗尽，连「体检」自己都先死
+> - **已改**：3 个纯脚本任务迁 systemd timer；心跳降频 + 限定活跃时段；【Q】断言改为「今日巡检日志是否真的产出」
+> - **额度恢复**：11-02 08:45 实测 minimax HTTP 200（0.97s）→ daily-learning 09:00 应恢复正常
+> - **已修**：配置哈希基线刷新（openclaw.json 昨晚 00:39 改了心跳配置，属**合法变更**但基线没跟着更新 → backup-audit 误报 FAIL）；巡检日志目录加入 .gitignore
+> - **还剩**：daily-learning / daily-reflection 仍需模型（真的需要写东西）→ 额度已恢复，等 09:00 验证
+> - **需要牛哥哥**：充值 Token Plan 或加第二把 key
+>
 > ## 📌 2026-10-26 这一天的核心（下次会话先读这段）
 >
 > **一天内发现并修掉 4 个「status=ok 但功能是死的」**：
@@ -24,7 +36,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=74 FAIL=1 WARN=5
+**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=67 FAIL=3 WARN=4
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -47,11 +59,16 @@
 > ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。
 
 **cron 任务**:
-- `teahouse-monitor` — cron 0 */4 * * * · timeout 600s · last: ok (7s)
-- `backup-audit` — cron 0 3 * * * · timeout 600s · last: ok (119s)
-- `healthcheck` — cron 0 7 * * * · timeout 600s · last: ok (135s)
-- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (736s)
-- `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: ok (30s)
+- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: error (225s)
+- `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: error (312s)
+
+**systemd timers（纯脚本任务，不消耗模型额度）**:
+- `openclaw-quick-health.timer` — 下次 Mon 2026-11-02 00:59:18 CST
+- `openclaw-backup-audit.timer` — 下次 Mon 2026-11-02 03:00:00 CST
+- `openclaw-teahouse-monitor.timer` — 下次 Mon 2026-11-02 04:15:00 CST
+- `openclaw-log-cleanup.timer` — 下次 Mon 2026-11-02 04:30:00 CST
+- `openclaw-healthcheck.timer` — 下次 Mon 2026-11-02 07:00:00 CST
+- `launchpadlib-cache-clean.timer` — 下次 Mon 2026-11-02 19:29:18 CST
 
 **plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw
 <!-- END:gen_system_status -->

@@ -46,6 +46,9 @@ WAITING_PATTERNS=(
   "只有 1 个 provider"
   "未配置任何 fallback"
   "fallback 全在"
+  # 2026-11-02 新增：MiniMax Token Plan 额度耗尽 —— 需要牛哥哥充值/升级，
+  # 不是「我现在就能修」的故障。放进来是为了不让长期项淹没真故障(E28)。
+  "Token Plan"
 )
 
 is_waiting() {
@@ -142,6 +145,16 @@ done
 tmr=$(systemctl --user is-active openclaw-log-cleanup.timer 2>/dev/null)
 if [ "$tmr" = "active" ]; then ok "openclaw-log-cleanup.timer = active"
 else bad "openclaw-log-cleanup.timer = ${tmr:-missing} - 日志轮转不会自动清理"; fi
+
+# 2026-11-02 新增：纯脚本任务从 agentTurn 型 cron 迁到 systemd timer
+# 背景：MiniMax Token Plan 用量上限触发 429 → agentTurn 型 cron 10-30/10-31/11-01 连挂 3 天。
+#       巡检/备份审计/茶馆抓取都是纯脚本（E8），不该依赖模型额度。
+# 断言的意义：迁走之后**没有 cron 兜底了**，timer 掉线 = 任务静默停摆。
+for t in openclaw-healthcheck.timer openclaw-backup-audit.timer openclaw-teahouse-monitor.timer; do
+  tst=$(systemctl --user is-active "$t" 2>/dev/null)
+  if [ "$tst" = "active" ]; then ok "$t = active"
+  else bad "$t = ${tst:-missing} - 该任务已无 cron 兜底，timer 掉了就会静默停摆"; fi
+done
 
 # 快速健康子集的定时器(30 分钟一次 + 独立告警链路)
 qtmr=$(systemctl --user is-active openclaw-quick-health.timer 2>/dev/null)
@@ -2184,58 +2197,77 @@ while IFS= read -r line; do
 done <<< "$u_report"
 PASS=$((PASS + 1))
 
-echo "【Q】cron 指令是否与脚本同步(防过期手册)"
+echo "【Q】巡检是否真的跑过 + 巡检说明是否与脚本同步"
 
-# 2026-10-27 03:30 补(E20/E31 的又一次实例):
-# cron 指令里手写的「13 组断言 A-M」在加了 N/O/P 三组后**没同步** --
-# 明早 07:00 真出故障时,agent 拿到的是一份**过期的手册**,
-# 新组(N/O/P)的失败它根本不知道怎么解释。
-#
-# 这正是 E20「验证了脚本却没验证指令」的翻版。
-# 解法:指令清单由 `scripts/gen_healthcheck_instruction.py` 从脚本生成,
-# 这里**自动核对**生成结果与 cron 里的实际内容是否一致。
-
+# 2026-11-02 改(E8/E20/E31/E34):
+# healthcheck 从 agentTurn 型 cron 迁到 systemd timer 之后,
+# 原来那层「cron 投递状态」的覆盖消失了 —— 没人再断言「巡检今天跑了没」。
+# 这里补上两件事:
+#   1) 今日巡检日志是否真的产出(timer 真跑了没 + 有没有跑完)
+#   2) 给 agent 看的说明清单(scripts/healthcheck_prompt.txt)是否与脚本实际组数一致
+#      —— E20/E31:验证了脚本却没验证「说明」,等于没验证
+#      —— E34:手写清单必然过期,所以清单由脚本生成,不手写
 inst_report=$(python3 - << 'PY4' 2>/dev/null
-import json, re, subprocess, sys
-sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+import importlib.util, re, sys
+from datetime import date
+from pathlib import Path
+WS = Path('/root/.openclaw/workspace')
+LOG_DIR = WS / 'memory' / 'healthcheck-logs'
+rc = 0
+
+# 1) 今日巡检日志是否产出
+# ⚠️ 2026-11-02 修正：**不能拿「正在写的那份日志」当证据** ——
+#    巡检跑到【Q】时,当前这份日志还没写完(结果行在最后) → 会自己把自己判成 FAIL。
+#    所以分两问:
+#      a) 今天有没有日志文件 = timer 跑了没
+#      b) 最近一次**跑完**的巡检(有结果行的那份)是不是在 2 天内
+today = date.today().isoformat()
+logs = sorted(LOG_DIR.glob(f'healthcheck-{today}*.txt'))
+if not logs:
+    print(f'FAIL 今日({today})巡检日志未产出 - systemd timer 没跑或跑失败')
+    rc = 1
+else:
+    print(f'PASS 今日巡检已启动({logs[-1].name})')
+    last_done = None
+    for lg in sorted(LOG_DIR.glob('healthcheck-*.txt'), reverse=True):
+        txt = lg.read_text(encoding='utf-8', errors='ignore')
+        m = re.search(r'结果: PASS=(\d+)\s+FAIL=(\d+)\s+WARN=(\d+)', txt)
+        if m:
+            last_done = (lg, tuple(map(int, m.groups())))
+            break
+    if last_done is None:
+        print('FAIL 从来没有一次巡检跑完过(日志里没有结果行)')
+        rc = 1
+    else:
+        lg, (p_, f_, w_) = last_done
+        d = date.fromisoformat(re.search(r'healthcheck-(\d{4}-\d{2}-\d{2})', lg.name).group(1))
+        age = (date.today() - d).days
+        if age > 2:
+            print(f'FAIL 最近一次跑完的巡检是 {age} 天前({lg.name}) - 巡检已停摆')
+            rc = 1
+        else:
+            print(f'PASS 最近一次跑完的巡检 PASS={p_} FAIL={f_} WARN={w_}({lg.name}, {age} 天内)')
+
+# 2) 说明清单是否与脚本同步
 try:
-    import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "gen", "/root/.openclaw/workspace/scripts/gen_healthcheck_instruction.py")
+        'gen', str(WS / 'scripts' / 'gen_healthcheck_instruction.py'))
     gen = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gen)
     groups = gen.extract_groups()
-    block = gen.build_block(groups)
-except Exception as e:
-    print(f"FAIL 生成器加载失败({type(e).__name__})")
-    raise SystemExit(1)
-
-try:
-    r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
-                       capture_output=True, text=True, timeout=60)
-    jobs, _ = json.JSONDecoder().raw_decode(r.stdout[r.stdout.find('['):])
-    msg = None
-    for j in jobs:
-        if j.get('id') == gen.CRON_ID:
-            msg = (j.get('payload') or {}).get('message', '')
-            break
-    if msg is None:
-        print("FAIL 找不到 healthcheck cron 任务")
-        raise SystemExit(1)
-except Exception as e:
-    print(f"FAIL 读不到 cron 指令({type(e).__name__})")
-    raise SystemExit(1)
-
-missing = [g for g, _ in groups if f'- {g} ' not in msg]
-if missing:
-    print(f"FAIL cron 指令缺 {len(missing)} 组说明({', '.join(missing)})"
-          f" -- 跑 `python3 scripts/gen_healthcheck_instruction.py --update` 同步")
-else:
-    n_decl = len(re.findall(r'^- ([A-Z]) ', msg, re.M))
-    if n_decl != len(groups):
-        print(f"FAIL cron 指令列了 {n_decl} 组,脚本实际 {len(groups)} 组 -- 需同步")
+    pf = WS / 'scripts' / 'healthcheck_prompt.txt'
+    prompt = pf.read_text(encoding='utf-8') if pf.exists() else ''
+    missing = [g for g, _ in groups if f'- {g} ' not in prompt]
+    if missing:
+        print(f'FAIL 巡检说明缺 {len(missing)} 组说明({", ".join(missing)})'
+              f' -- 跑 `python3 scripts/gen_healthcheck_instruction.py --update` 同步')
+        rc = 1
     else:
-        print(f"PASS cron 指令与脚本同步({len(groups)} 组)")
+        print(f'PASS 巡检说明与脚本同步({len(groups)} 组)')
+except Exception as e:
+    print(f'FAIL 说明同步检查失败({type(e).__name__})')
+    rc = 1
+raise SystemExit(rc)
 PY4
 )
 while IFS= read -r line; do

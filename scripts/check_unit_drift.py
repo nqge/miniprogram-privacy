@@ -55,6 +55,38 @@ UNITS = {
         "enabled": False,
         "checks": [],
     },
+    # 2026-11-02 新增：纯脚本任务从 agentTurn 型 cron 迁到 systemd timer
+    # （背景：MiniMax Token Plan 触发 429 → agentTurn 型 cron 连挂 3 天；E8）
+    "openclaw-healthcheck.timer": {
+        "enabled": True,
+        "checks": [],
+    },
+    "openclaw-backup-audit.timer": {
+        "enabled": True,
+        "checks": [],
+    },
+    "openclaw-teahouse-monitor.timer": {
+        "enabled": True,
+        "checks": [],
+    },
+    "openclaw-healthcheck.service": {
+        "enabled": False,  # 由 timer 触发
+        "checks": [
+            ("ExecStart", "run_logged.sh healthcheck", "巡检执行入口"),
+        ],
+    },
+    "openclaw-backup-audit.service": {
+        "enabled": False,
+        "checks": [
+            ("ExecStart", "run_logged.sh backup-audit", "备份审计执行入口"),
+        ],
+    },
+    "openclaw-teahouse-monitor.service": {
+        "enabled": False,
+        "checks": [
+            ("ExecStart", "run_logged.sh teahouse-monitor", "茶馆监控执行入口"),
+        ],
+    },
 }
 
 # 定时器必须存在的调度
@@ -68,6 +100,19 @@ TIMERS = {
     ],
     "openclaw-log-cleanup.timer": [
         ("TimersCalendar", "OnCalendar", "每日定时"),
+        ("Persistent", None, "关机/休眠错过的会补跑"),
+    ],
+    # 2026-11-02：从 agentTurn 型 cron 迁过来的三个纯脚本任务
+    "openclaw-healthcheck.timer": [
+        ("TimersCalendar", "OnCalendar", "每日 07:00"),
+        ("Persistent", None, "关机/休眠错过的会补跑"),
+    ],
+    "openclaw-backup-audit.timer": [
+        ("TimersCalendar", "OnCalendar", "每日 03:00"),
+        ("Persistent", None, "关机/休眠错过的会补跑"),
+    ],
+    "openclaw-teahouse-monitor.timer": [
+        ("TimersCalendar", "OnCalendar", "每 4 小时"),
         ("Persistent", None, "关机/休眠错过的会补跑"),
     ],
 }

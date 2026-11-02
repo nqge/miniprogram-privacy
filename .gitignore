@@ -21,3 +21,7 @@ __pycache__/
 *.pyc
 logs/
 .alert-state.json
+
+# 巡检日志 —— systemd timer 每天/每4小时重新生成，体积随时间增长
+# 结论已提炼进 memory/每日笔记，日志本身不入库
+/memory/healthcheck-logs/

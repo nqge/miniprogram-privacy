@@ -160,7 +160,27 @@ def main() -> int:
             continue
 
         if run_status != "ok":
-            print(f"FAIL {name} 运行失败（lastRunStatus={run_status}）")
+            # 2026-11-02：把**失败原因**带进 FAIL 文本。
+            # 原因决定分类（额度耗尽 = 等牛哥哥充值；脚本报错 = 我能修），
+            # 只有状态码的话，两种完全不同的故障长得一模一样。
+            reason = ""
+            job_id = j.get("id") or j.get("jobId")
+            if job_id:
+                try:
+                    hist = _load_history(env, job_id, limit=1)
+                    if hist:
+                        err = str(hist[0].get("error") or "")
+                        if "Token Plan" in err:
+                            reason = "，原因：Token Plan 用量上限(需充值)"
+                        elif "rate limit" in err.lower():
+                            reason = "，原因：接口限流"
+                        elif "timed out" in err:
+                            reason = "，原因：执行超时"
+                        elif err:
+                            reason = f"，原因：{err[:60]}"
+                except Exception:
+                    pass
+            print(f"FAIL {name} 运行失败（lastRunStatus={run_status}{reason}）")
             failed += 1
         elif mode == "announce":
             job_id = j.get("id") or j.get("jobId")
