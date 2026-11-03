@@ -109,6 +109,26 @@ def _classify_output(summary):
     return "unknown"
 
 
+def _max_consecutive_errors(runs):
+    """返回**最长连续失败次数**（runs 按时间倒序，最新在前）。
+
+    为什么要这个维度（2026-11-03 实测）：
+      同样是「3 次 error」，散落在 20 次里 vs **连续 3 天**，
+      运维含义完全不同 —— 后者是**静默中断**，用户完全无感。
+      daily-learning 10-30/10-31/11-01 连挂 3 天，
+      而巡检只因 lastRunStatus=ok 就报「投递正常」。
+    """
+    best = 0
+    cur = 0
+    for r in runs:
+        if r.get("status") == "error":
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    return best
+
+
 def _load_history(env, job_id, limit=20):
     """拉取某个 job 的历史运行记录（用于检查历史投递失败）。
 
@@ -217,6 +237,42 @@ def main() -> int:
                 r for r in runs
                 if r.get("status") == "ok" and r.get("delivered") is False
             ]
+            error_runs = [r for r in runs if r.get("status") == "error"]
+
+            # ── 2026-11-03 更正：error 计数必须【无条件】报告 ──
+            #
+            # 原 bug：error 统计写在 `else:` 分支里（undelivered 为空时）。
+            # 只要历史上存在任何一次「ok 但没投递」，就永远走不到 else →
+            # **error 次数被完全吞掉**。
+            # 实测（daily-learning，20 次运行里 7 次 error，含 10-30/10-31/11-01
+            # 三次连续失败）：报告只说「3/20 次运行成功但未投递」，
+            # **3 天连续全挂只字未提**，而 lastRunStatus=ok 让它看起来一切正常。
+            # → 这正是 E57「监控路径与被监控路径共用会死的依赖」的变体：
+            #   巡检自己的判据有盲区，于是故障静悄悄通过。
+            #
+            # 修法：error 统计与 undelivered 统计【正交】，两边都要报。
+            if error_runs:
+                err_ts = []
+                for r in error_runs[:5]:
+                    ms = r.get("runAtMs")
+                    err_ts.append(
+                        datetime.datetime.fromtimestamp(ms / 1000).strftime("%m-%d %H:%M")
+                        if isinstance(ms, (int, float)) else "?"
+                    )
+                # 连续失败比零散失败严重得多：连续 N 天挂 = 静默中断 N 天
+                consec = _max_consecutive_errors(runs)
+                if consec >= 2:
+                    print(
+                        f"WARN {name} 最近 {len(runs)} 次里有 {len(error_runs)} 次 error"
+                        f"，其中最多【连续 {consec} 次】失败（最近一次正常）："
+                        f"{', '.join(err_ts)}"
+                    )
+                else:
+                    print(
+                        f"WARN {name} 最近 {len(runs)} 次里有 {len(error_runs)} 次 error"
+                        f"（最近一次正常）：{', '.join(err_ts)}"
+                    )
+
             if undelivered:
                 ts = []
                 for r in undelivered[:5]:
@@ -260,13 +316,9 @@ def main() -> int:
                             f"（{len(intentional)} 次）"
                         )
             else:
-                recent_errors = sum(1 for r in runs if r.get("status") == "error")
-                if recent_errors:
-                    print(
-                        f"WARN {name} 最近 {len(runs)} 次里有 {recent_errors} 次 error"
-                        f"（最近一次正常）"
-                    )
-                else:
+                # 2026-11-03：error 统计已提到【无条件】分支（见上）。
+                # 这里保留原有的「历史投递均正常」PASS 判定。
+                if not error_runs:
                     print(f"PASS {name} 历史投递均正常（近 {len(runs)} 次）")
 
     # 供 shell 统计失败数

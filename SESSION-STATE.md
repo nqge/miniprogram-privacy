@@ -1,7 +1,7 @@
 # SESSION-STATE.md
 
-**最后更新**: 2026-11-03 08:55
-**状态**: ✅ **停摆已结束，架构修复已验证生效**（2026-11-03 实测：07:00 巡检 PASS=70 FAIL=2 WARN=4 日志正常产出｜backup-audit PASS=19｜daily-learning 09:00 `ok/delivered`）。**唯一可处理 FAIL = daily-reflection 上次因限流失败**（11-01 那次，今天已补跑）。仍需牛哥哥决策：充值/升级 Token Plan 或加第二把 key（E39：第二把 key 的价值是拆开共享配额，不是容灾冗余）。fallback 链 2 项全在同一账号下 → provider 级故障时兜底无效（【M】长期项）。
+**最后更新**: 2026-11-03 09:05
+**状态**: ✅ **停摆已结束**（2026-11-03 实测：07:00 巡检 PASS=73 FAIL=1 WARN=6 日志正常产出｜backup-audit PASS=19｜daily-learning `ok/delivered`｜daily-reflection 补跑 80s `ok/delivered`）。🚨 **新发现**：`daily-reflection` **连续 4 个月计划槽位零成功**（根因换过三茬：provider 已死 → timeout 180s 太短 → 额度耗尽）；巡检判据盲区已修（error 统计被 `else` 分支吞掉 → daily-learning 连续 3 天全挂此前不可见），新增「最长连续失败次数」维度 + L1 E58 + 9 个新单测。仍需牛哥哥决策：充值/升级 Token Plan 或加第二把 key（E39：第二把 key 的价值是拆开共享配额，不是容灾冗余）。fallback 链 2 项全在同一账号下 → provider 级故障时兜底无效（【M】长期项）。
 
 > ## 📌 2026-11-03 早的核心（下次会话先读这段）
 >
@@ -16,6 +16,33 @@
 >   → 写入了 `memory/2026-11-03.md`，commit `38074a0`，已 push（rev-list 0/0）
 > - **遗留风险**：若额度**再次**耗尽，靠模型的 2 个 cron 会再次全挂；
 >   但这次体检/审计/茶馆监控**不会跟着死**（systemd，不消耗额度）→ 断点已解
+>
+> ### 🚨 08:55 心跳巡检的追加发现（比上面那条严重得多）
+>
+> **一句话**：`daily-reflection` 不是「昨天挂了一次」，**它连续 4 个月没成功过**；
+> 而巡检判据本身有盲区，把这事藏了 4 个月。
+>
+> - **事实**：查 `cron/runs/b7a0aca1-*.jsonl` 全部 **44 条**记录 → **只有 3 次 `ok`**，
+>   且 3 次**全是手动补跑**（10-21 04:27 Wed、10-26 00:35 Mon、10-26 09:21 Mon）
+>   → **周日 22:00 计划槽位 15 次全挂，成功率 0%**（2026-05-14 → 11-01）
+> - **根因换过三茬**（每次都以为「修好了」）：
+>   ① glmcode/GLM-5 + kimicode → HTTP 400（provider 已死，现已删）
+>   ② minimax/MiniMax-M3 → HTTP 400 / 超时(180s) → 后来把 timeout 改到 900s
+>   ③ minimax → rate_limit（Token Plan 额度耗尽）
+>   → **900s timeout 的修法从来没在「额度健康」条件下被验证过**（11-01 那次是配额问题）
+> - **已验证**：11-03 08:51 补跑 **80s / ok / delivered=True** → 修法确实有效
+> - **判据盲区（已修）**：`scripts/check_cron_delivery.py` 把 error 统计写在 `else:` 分支里
+>   → 只要历史上存在任何一次「ok 但没投递」就**永远走不到** → **error 次数被完全吞掉**
+>   → daily-learning 的 10-30/10-31/11-01 **连续 3 天全挂**在报告里只字未提
+>   → 修法：error 统计与未投递统计**正交**；新增「**最长连续失败次数**」维度
+> - **新增 L1：E58**（「最近一次是 ok」≠「最近一直 ok」）
+> - **巡检结果**：PASS=73 FAIL=1 WARN=6（改前 PASS=70 FAIL=2 WARN=4）
+>   → 唯一 FAIL 是 `daily-reflection` 的**陈旧** lastRunStatus（手动补跑成功后历史已修好）
+> - **单测**：`scripts/test_cron_delivery_output.py` 21 → **30 个用例**，全通过
+>
+> **教训**：状态字段描述的是「**当前**」，健康度需要「**一直**」。
+> 拿单点快照当趋势用，会系统性地**低估故障时长**——
+> 停了 1 天看不出来，停了 4 个月**也只报一行**。
 >
 > ## 📌 2026-11-02 今晚的核心（存档）
 >
@@ -47,7 +74,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=70 FAIL=2 WARN=4
+**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=73 FAIL=1 WARN=6
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态

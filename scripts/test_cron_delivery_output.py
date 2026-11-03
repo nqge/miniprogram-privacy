@@ -121,6 +121,87 @@ def main():
          "英文标记应大小写不敏感")
     )
 
+    # ── 8. E58：连续失败次数（2026-11-03 新增）────────────
+    #
+    # 背景：daily-learning 有 7 次 error（含 10-30/10-31/11-01 连续 3 天全挂），
+    # 而巡检只报「投递正常」—— 因为 error 统计写在 else 分支里，
+    # 只要历史上存在任何一次「ok 但没投递」就永远走不到 → error 被吞掉。
+    # 修法：error 统计与未投递统计正交，并新增「最长连续失败次数」维度。
+    #
+    # ⚠️ 造数据铁律（E58 实测踩坑）：必须用**绝对时间戳**造「连续」，
+    #    不要用相对 offset —— 连续与否是按 runs 数组**顺序**判的，
+    #    但「计划槽位失败 vs 手动补跑成功」要靠时间戳对齐 cron 表达式来区分。
+
+    def mk(status, delivered=None):
+        return {"status": status, "delivered": delivered, "runAtMs": 1790000000000}
+
+    # 8.1 全成功 → 连续失败 0
+    cases.append(
+        (ccd._max_consecutive_errors([mk("ok"), mk("ok"), mk("ok")]) == 0,
+         "全成功时连续失败次数应为 0")
+    )
+
+    # 8.2 连续 3 次 error → 应报 3
+    cases.append(
+        (ccd._max_consecutive_errors([mk("error"), mk("error"), mk("error"), mk("ok")]) == 3,
+         "连续 3 次 error 应识别为连续 3 次")
+    )
+
+    # 8.3 零散失败 → 不是连续（这是关键区分）
+    cases.append(
+        (ccd._max_consecutive_errors([mk("ok"), mk("error"), mk("ok"), mk("error"), mk("ok")]) == 1,
+         "零散 error 不应被当成连续失败")
+    )
+
+    # 8.4 真实数据复现：daily-learning 的 error 序列 → 连续 3
+    dl_runs = [
+        mk("ok", True),          # 11-02
+        mk("error"),             # 11-01
+        mk("error"),             # 10-31
+        mk("error"),             # 10-30
+        mk("ok", True),          # 10-29
+    ]
+    cases.append(
+        (ccd._max_consecutive_errors(dl_runs) == 3,
+         "daily-learning 真实序列应识别出连续 3 次失败")
+    )
+
+    # 8.5 真实数据复现：daily-reflection 计划槽位连挂 → 连续 14+
+    dr_runs = [mk("ok", True)] + [mk("error")] * 14
+    cases.append(
+        (ccd._max_consecutive_errors(dr_runs) == 14,
+         "daily-reflection 真实序列应识别出连续 14 次失败")
+    )
+
+    # 8.6 单个 error → 连续 1
+    cases.append(
+        (ccd._max_consecutive_errors([mk("ok"), mk("error")]) == 1,
+         "单个 error 的连续次数为 1")
+    )
+
+    # 8.7 空列表 → 0（不崩）
+    cases.append(
+        (ccd._max_consecutive_errors([]) == 0,
+         "空 runs 列表应返回 0 而不抛异常")
+    )
+
+    # 8.8 【故障注入】判据要能抓住「中间断了」的情况：
+    #     失败-成功-失败-失败-失败 → 最长连续 3（在数组尾部）
+    cases.append(
+        (ccd._max_consecutive_errors(
+            [mk("error"), mk("ok"), mk("error"), mk("error"), mk("error")]) == 3,
+         "应取所有连续段里最长的那个，而不是第一段或最后一段")
+    )
+
+    # 8.9 【故障注入】runs 为 None → 不该抛异常（历史读取失败的场景）
+    #      真实代码里 runs is None 会被上层 continue 掉，但函数本身要稳
+    try:
+        ccd._max_consecutive_errors([None])
+        none_safe = False
+    except Exception:
+        none_safe = True
+    cases.append((none_safe, "遇到异常元素不应静默返回错误结果"))
+
     failed = 0
     for ok, name in cases:
         if ok:
