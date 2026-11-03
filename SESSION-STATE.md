@@ -1,19 +1,30 @@
 # SESSION-STATE.md
 
-**最后更新**: 2026-11-02 08:50
-**状态**: ✅ **MiniMax 额度已恢复**（2026-11-02 08:45 实测 HTTP 200，0.97s）→ 09:00 的 daily-learning 应能正常跑。仍需牛哥哥决策：充值/升级 Token Plan 或加第二把 key（E39：第二把 key 的价值是拆开共享配额，不是容灾冗余）。fallback 链 2 项全在同一账号下 → provider 级故障时兜底无效（【M】长期项）。
+**最后更新**: 2026-11-03 08:55
+**状态**: ✅ **停摆已结束，架构修复已验证生效**（2026-11-03 实测：07:00 巡检 PASS=70 FAIL=2 WARN=4 日志正常产出｜backup-audit PASS=19｜daily-learning 09:00 `ok/delivered`）。**唯一可处理 FAIL = daily-reflection 上次因限流失败**（11-01 那次，今天已补跑）。仍需牛哥哥决策：充值/升级 Token Plan 或加第二把 key（E39：第二把 key 的价值是拆开共享配额，不是容灾冗余）。fallback 链 2 项全在同一账号下 → provider 级故障时兜底无效（【M】长期项）。
 
-> ## 📌 2026-11-02 今晚的核心（下次会话先读这段）
+> ## 📌 2026-11-03 早的核心（下次会话先读这段）
+>
+> **一句话**：11-02 的架构修复（纯脚本任务迁 systemd timer）**今天拿到真实验收**——
+> 不依赖模型额度的巡检照常产出，靠模型的 daily-learning 也恢复投递。
+>
+> - **11-03 07:00 巡检**：PASS=70 FAIL=2 WARN=4，**日志已产出**（`memory/healthcheck-logs/`）
+> - **11-03 03:00 backup-audit**：PASS=19（配置基线已刷新，不再误报）
+> - **11-03 09:00 daily-learning**：`status=ok` / `lastDeliveryStatus=delivered` ✅
+>   → **额度恢复后第一个「靠模型」的任务也活了**
+> - **11-03 08:51 daily-reflection**：本次为 catch-up run（11-01 周日 22:00 因 rate_limit 失败后补跑）
+>   → 写入了 `memory/2026-11-03.md`，commit `38074a0`，已 push（rev-list 0/0）
+> - **遗留风险**：若额度**再次**耗尽，靠模型的 2 个 cron 会再次全挂；
+>   但这次体检/审计/茶馆监控**不会跟着死**（systemd，不消耗额度）→ 断点已解
+>
+> ## 📌 2026-11-02 今晚的核心（存档）
 >
 > **一句话**：模型额度耗尽 → 「靠模型干活的定时任务」全灭；「不靠模型的」一个没死。
 >
 > - **事实**：429 报错原文「已达到 Token Plan 用量上限」，3 个模型全 429 → fallback 链无效（同账号同额度桶）
 > - **教训**：E8「纯脚本任务不该用 agent 型 cron」早就写下来了，**但没执行** —— 额度一耗尽，连「体检」自己都先死
 > - **已改**：3 个纯脚本任务迁 systemd timer；心跳降频 + 限定活跃时段；【Q】断言改为「今日巡检日志是否真的产出」
-> - **额度恢复**：11-02 08:45 实测 minimax HTTP 200（0.97s）→ daily-learning 09:00 应恢复正常
 > - **已修**：配置哈希基线刷新（openclaw.json 昨晚 00:39 改了心跳配置，属**合法变更**但基线没跟着更新 → backup-audit 误报 FAIL）；巡检日志目录加入 .gitignore
-> - **还剩**：daily-learning / daily-reflection 仍需模型（真的需要写东西）→ 额度已恢复，等 09:00 验证
-> - **需要牛哥哥**：充值 Token Plan 或加第二把 key
 >
 > ## 📌 2026-10-26 这一天的核心（下次会话先读这段）
 >
@@ -36,7 +47,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=67 FAIL=3 WARN=4
+**巡检现状**: 26 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=70 FAIL=2 WARN=4
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -59,16 +70,16 @@
 > ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。
 
 **cron 任务**:
-- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: error (225s)
+- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (279s)
 - `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: error (312s)
 
 **systemd timers（纯脚本任务，不消耗模型额度）**:
-- `openclaw-quick-health.timer` — 下次 Mon 2026-11-02 00:59:18 CST
-- `openclaw-backup-audit.timer` — 下次 Mon 2026-11-02 03:00:00 CST
-- `openclaw-teahouse-monitor.timer` — 下次 Mon 2026-11-02 04:15:00 CST
-- `openclaw-log-cleanup.timer` — 下次 Mon 2026-11-02 04:30:00 CST
-- `openclaw-healthcheck.timer` — 下次 Mon 2026-11-02 07:00:00 CST
-- `launchpadlib-cache-clean.timer` — 下次 Mon 2026-11-02 19:29:18 CST
+- `openclaw-quick-health.timer` — 下次 Tue 2026-11-03 09:00:18 CST
+- `openclaw-teahouse-monitor.timer` — 下次 Tue 2026-11-03 12:15:00 CST
+- `launchpadlib-cache-clean.timer` — 下次 Tue 2026-11-03 19:30:18 CST
+- `openclaw-backup-audit.timer` — 下次 Wed 2026-11-04 03:00:00 CST
+- `openclaw-log-cleanup.timer` — 下次 Wed 2026-11-04 04:30:00 CST
+- `openclaw-healthcheck.timer` — 下次 Wed 2026-11-04 07:00:00 CST
 
 **plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw
 <!-- END:gen_system_status -->
