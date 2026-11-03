@@ -60,9 +60,15 @@ NOTES = {
 
 
 def extract_groups():
+    """提取 healthcheck.sh 里的所有组。
+
+    ⚠️ 2026-11-03 修正：组名正则从 `[A-Z]` 放宽成 `[A-Z][0-9]*`。
+       原来只匹配**单字母**组 → 【W2】【W3】这种带数字的组**被漏掉**，
+       导致「巡检说明与脚本同步(26 组)」报的是 26 而不是真实的 28。
+       → 又一次「用单点快照当全貌」的同类错误。
+    """
     txt = SH.read_text(encoding='utf-8')
-    found = re.findall(r'echo "【([A-Z])】([^"]+)"', txt)
-    order = {g: i for i, (g, _) in enumerate(found)}
+    found = re.findall(r'echo "【([A-Z][0-9]*)】([^"]+)"', txt)
     # 按字母排序输出（和脚本里的顺序无关，但可读性好）
     return sorted(found, key=lambda x: x[0])
 

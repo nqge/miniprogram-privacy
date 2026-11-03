@@ -4,7 +4,7 @@
 - 若输出里 FAIL=0 → 一句话汇报「巡检通过 PASS=N」即可，不要贴全部输出
 - 若有 FAIL → 贴出失败项和原因，并写进 memory/YYYY-MM-DD.md
 
-**当前 FAIL 的 26 类含义**（由 `scripts/gen_healthcheck_instruction.py` 从 healthcheck.sh 自动生成，**不要手写**）：
+**当前 FAIL 的 28 类含义**（由 `scripts/gen_healthcheck_instruction.py` 从 healthcheck.sh 自动生成，**不要手写**）：
 （以下是「可处理」类的含义；E 类明文凭证、M 类 provider 韧性属长期项，
 已在脚本里自动归入「等你」组，不触发告警）
 - A 飞书 token / GitHub 额度（认证 5000 次/小时）/ 嵌入代理
@@ -30,6 +30,8 @@
 - U cron 实测耗时 vs 超时余量：最近一次超过 70% → FAIL；最近 3 次递增且超 50% → WARN（巡检一周长了 11 倍，这个趋势原本没人看得见）
 - V 会话里的长 poll(指令说了但没照做的信号)
 - W 【V】判据自身的单测(防判据本身是坏的)
+- W2 cron 投递判据单测(E55：本该发什么)
+- W3 小节长度判据单测(2026-11-03 加:正则盲区)
 - X 巡检脚本自己的解析器自检(防断言装死)
 - Y 外部 API 的响应延迟(不只是能不能通)
 - Z 压缩后重注入的上下文预算（防红线被截掉）
