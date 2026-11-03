@@ -1128,6 +1128,44 @@ else:
     if _stray:
         problems.append(f"标记块外还有 {_stray} 行散落的「巡检现状」-- 每次巡检都在自增")
 
+# 5) **手写的头部状态行**里提到的 cron 状态，必须与真实一致。
+#
+# 2026-11-03 11:34 补:
+# 上面 1)-4) 全都只校验**自动生成**的「系统状态」小节，
+# 但**头部那行 `**状态**:` 是手写的**，而且它是**下一个会话最先读的一句话**。
+# → 实测: daily-learning 09:00 已经限流失败了，头部还写着 `ok/delivered`，
+#   【S】组**照样 PASS** —— 因为它根本没看那一行。
+#
+# 这正是 E36 的老问题（连续性入口过期 = 下个会话被误导），只是这次漏的是
+# 「手写部分」而不是「生成部分」。
+#
+# 断言方式: 头部状态行里凡是写了 `<任务名> ok` / `<任务名> error` 的，
+#          就去真实 cron 状态里核对。**只查明确声明了状态的任务**，
+#          不猜（没提到就不管）—— 保守优先，宁可漏判不误判。
+try:
+    _hdr_m = re.search(r'^\*\*状态\*\*: (.*)$', txt, re.M)
+    if _hdr_m:
+        _hdr = _hdr_m.group(1)
+        _r2 = subprocess.run(['openclaw', 'cron', 'list', '--json'],
+                              capture_output=True, text=True, timeout=60)
+        _jobs2, _ = json.JSONDecoder().raw_decode(_r2.stdout[_r2.stdout.find('['):])
+        _real = {j['name']: (j.get('state') or {}).get('lastRunStatus')
+                 for j in _jobs2}
+        for _name, _st in _real.items():
+            if _name not in _hdr:
+                continue
+            # 头部里这个任务名后面紧跟的状态词。
+            # 容忍中间的反引号/空格: 写法是 `daily-learning \`ok/delivered\``
+            _m2 = re.search(re.escape(_name) + r'[^A-Za-z]{0,4}(ok|error)', _hdr)
+            if not _m2:
+                continue
+            _claimed = _m2.group(1)
+            if _st and _st != _claimed:
+                problems.append(
+                    f"头部状态行说 {_name} `{_claimed}`,实际是 `{_st}`")
+except Exception:
+    pass
+
 if problems:
     for p in problems:
         print(f"FAIL {p}")
