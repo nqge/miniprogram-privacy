@@ -2565,23 +2565,43 @@ done <<< "$prov_report"
 # ── 汇总 ─────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
-echo " 结果: PASS=$PASS  FAIL=$FAIL  WARN=$WARN"
+
+# 2026-11-03 更正：FAIL 计数**混进了「等你」的长期项**。
+#
+# 事实：`bad()` 对每一项都 FAIL+=1，但如果文案命中 WAITING_PATTERNS
+#      就打印成「⏳ 等你」而不是「❌ FAIL」。
+#      → 汇总行会写成 `FAIL=1`，可下面明明写着「✅ 没有可处理的失败」。
+#      → 只看计数行（或只看退出码）的人/脚本，会得到**假警报**。
+#
+# 这正是 E47 的老问题换个马甲：状态字段 ≠ 实际结论。
+#   计数行是「给人看的结论」，退出码是「给脚本看的信号」——
+#   两者都该表达**可处理的故障数**，而不是**所有非 PASS 项数**。
+#
+# 修法：把「可处理失败」和「等牛哥哥的长期项」分开计数、分开显示。
+#   - 汇总行同时给出 FAIL（可处理）和 等你（长期项）
+#   - 退出码按「可处理失败数」决定 —— 长期项不该让 systemd/巡检判红
+#
+# 注意：**PASS 计数不变**（PASS 就是真的 PASS），只把 FAIL 拆成两类。
+_actionable_n=0
+for it in "${FAILED_ITEMS[@]}"; do
+  is_waiting "$it" || _actionable_n=$((_actionable_n+1))
+done
+_waiting_n=${#WAITING_ITEMS[@]}
+
+if [ "$_waiting_n" -gt 0 ]; then
+  echo " 结果: PASS=$PASS  FAIL=$_actionable_n  WARN=$WARN  等你=$_waiting_n（长期项，不计入 FAIL）"
+else
+  echo " 结果: PASS=$PASS  FAIL=$_actionable_n  WARN=$WARN"
+fi
 
 # 维护 SESSION-STATE.md 里的「巡检现状」行 -- 避免硬编码数字变陈旧
 # (2026-10-26 教训:SESSION-STATE 头部曾过期 5 天)
 # 独立成脚本:bash 里嵌套 heredoc + 命令替换会导致变量展开异常(实测 $GROUPS 恒为空)
-python3 /root/.openclaw/workspace/scripts/update_state_status.py "$PASS" "$FAIL" "$WARN" >/dev/null 2>&1
+python3 /root/.openclaw/workspace/scripts/update_state_status.py "$PASS" "$_actionable_n" "$WARN" >/dev/null 2>&1
 
-if [ "$FAIL" -gt 0 ]; then
+if [ "$_actionable_n" -gt 0 ]; then
   echo ""
-  actionable_n=0
-  for it in "${FAILED_ITEMS[@]}"; do is_waiting "$it" || actionable_n=$((actionable_n+1)); done
-  waiting_n=${#WAITING_ITEMS[@]}
-  if [ "$actionable_n" -gt 0 ]; then
-    echo " ⚠️ 有 $actionable_n 项可处理的失败,需要处理。"
-  else
-    echo " ✅ 没有可处理的失败($waiting_n 项长期项在等你处理)。"
-  fi
+  echo " ⚠️ 有 $_actionable_n 项可处理的失败,需要处理。"
   echo "   【可处理 - 现在就该修】"
   for it in "${FAILED_ITEMS[@]}"; do
     is_waiting "$it" || echo "   - $it"
@@ -2595,5 +2615,7 @@ if [ "$FAIL" -gt 0 ]; then
 fi
 echo "════════════════════════════════════════════"
 
-[ "$FAIL" -gt 0 ] && exit 1
+# 退出码按「可处理失败数」判定 —— 长期项不该让 systemd 判红。
+# (systemd 侧 SuccessExitStatus=1 仍然保留，双保险)
+[ "$_actionable_n" -gt 0 ] && exit 1
 exit 0
