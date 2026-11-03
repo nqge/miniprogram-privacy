@@ -419,8 +419,15 @@ for p in cands:
     if not os.path.exists(p):
         continue
     s = open(p, encoding='utf-8', errors='replace').read()
-    learn = re.findall(r'^## 📚 每日学习.*$', s, re.M)
-    refl  = re.findall(r'^## 🪞 每日反思.*$', s, re.M)
+    # ⚠️ 2026-11-03: **围栏代码块里的标题不算标题**（同上）。
+    #    笔记里写「更正记录」时常用 ``` 举例 `## 🪞 每日反思（三问）`，
+    #    不剥围栏就会把它当成真小节 → 报「有 2 个反思小节」。
+    s_nofence = re.sub(
+        r'(?ms)^```.*?^```\s*$|^```.*?\Z',
+        lambda m: ''.join('\n' if c == '\n' else ' ' for c in m.group(0)),
+        s)
+    learn = re.findall(r'^## 📚 每日学习.*$', s_nofence, re.M)
+    refl  = re.findall(r'^## 🪞 每日反思.*$', s_nofence, re.M)
     name = os.path.basename(p)
     is_daily = bool(re.match(r'^\d{4}-\d{2}-\d{2}\.md$', name))
     if is_daily:
@@ -463,9 +470,19 @@ for p in cands:
     #      (10-27 那种「学习小节下挂了 30 多条 ### 心跳记录」必须在这里截断,
     #       否则会把别人的内容算进来 → 报 12095 汉字)
     # 不带日期的 `### 1. / ### 📌 待牛哥哥决策` → 算本节内部,保留。
+    # ⚠️ 2026-11-03 第三次修正: **围栏代码块里的标题不算标题**。
+    # 实测: 笔记里的「更正记录」用 ``` 代码块**举例** `## 🪞 每日反思（三问）`,
+    #       结果这个举例用的标题被当成真小节 → 把整篇更正记录都算进去(1535 汉字)。
+    # → 任何「按标题找小节」的判据都要先剥掉围栏块。
+    # 做法: 把 ```...``` 替换成**等长空白**(保持行号/偏移不变),
+    #       再在剥过的文本里找小节 —— 量出来的正文仍是原文。
+    s_nofence = re.sub(
+        r'(?ms)^```.*?^```\s*$|^```.*?\Z',
+        lambda m: ''.join('\n' if c == '\n' else ' ' for c in m.group(0)),
+        s)
     for m in re.finditer(
         r'^## (📚 每日学习|🪞 每日反思).*?\n(.*?)(?=^## |^### \d{4}-\d{2}-\d{2}|\Z)',
-        s, re.M | re.S):
+        s_nofence, re.M | re.S):
         body = m.group(2)
         zh = len(re.findall(r'[一-鿿]', body))
         if zh > 400:

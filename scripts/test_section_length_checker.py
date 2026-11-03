@@ -45,8 +45,8 @@ import trim_learning_section as tls  # ← 真身，不是抄版
 
 
 def measure(text):
-    """用真身的 SEC_RE 量一段文本里的小节汉字数。"""
-    m = tls.SEC_RE.search(text)
+    """用真身的 SEC_RE 量一段文本里的小节汉字数（围栏感知）。"""
+    m = tls.SEC_RE.search(tls._blank_fences(text))
     if not m:
         return None, None
     return tls.zh_count(m.group(2)), m.group(1)
@@ -154,6 +154,35 @@ def main():
     cases.append(
         (n is not None and old_n is not None and n > old_n * 2,
          f"【注入】新正则必须明显优于旧正则（新 {n} vs 旧 {old_n}）")
+    )
+
+    # ── 6b. 【围栏感知】代码块里**举例用的标题**不算标题 ──
+    #     实测 bug：更正记录里用 ``` 举例 `## 🪞 每日反思（三问）`，
+    #     结果被当成真小节 → 把整篇更正记录都算进去（1535 汉字）
+    fenced = (
+        "## 📌 更正记录\n"
+        + "这是一段很长的更正说明。" * 60 + "\n"
+        "```\n"
+        "## 🪞 每日反思（三问）\n"
+        "### 1. 某问题？\n"
+        + "举例内容。" * 20 + "\n"
+        "```\n"
+        + "更正记录继续。" * 60 + "\n"
+        "\n"
+        "## 🪞 每日反思（三问）\n"
+        + "真正的反思内容。" * 20 + "\n"
+    )
+    m_f = tls.SEC_RE.search(tls._blank_fences(fenced))
+    nf = tls.zh_count(m_f.group(2)) if m_f else None
+    m_f_old = tls.SEC_RE.search(fenced)
+    nf_old = tls.zh_count(m_f_old.group(2)) if m_f_old else None
+    cases.append(
+        (nf is not None and nf < 300,
+         f"围栏代码块里的标题不应被当成小节（剥后 {nf}，应 <300）")
+    )
+    cases.append(
+        (nf_old is not None and nf_old > 300,
+         f"【注入】剥围栏前确实会误判（{nf_old}，应 >300）")
     )
 
     # ── 7. 真实回归样本：2026-11-03 反思小节应为 393 字（上限 400）──

@@ -68,6 +68,32 @@ MAX_ZH = 200
 # 判据：子标题里带**日期**（`### 2026-10-27 07:09 …`）→ 是新记录，截断；
 #       子标题不带日期（`### 1. …` / `### 📌 待牛哥哥决策`）→ 是本节内部，保留。
 _SEC_END = r'(?=^## |^### (?:\d{4}-\d{2}-\d{2})|\Z)'
+# ⚠️ 2026-11-03 第二次修正：**围栏代码块里的标题不算标题**。
+#
+# 实测: 我在笔记里写了一段「更正记录」，里面用 ``` 代码块**举例**
+# `## 🪞 每日反思（三问）` 长什么样 —— 结果这个**举例用的标题**
+# 被正则当成了真的小节 → 量到 1535 汉字（把整篇更正记录都算进去）。
+#
+# → 任何「按标题找小节」的判据，都必须**先剥掉围栏代码块**。
+#   （同类问题：Markdown 里 ``` 内的 # 注释、Python 注释里的 ## 都同理）
+#
+# 实现: 用一个「占位符」把 ```...``` 的内容换掉再匹配，
+#       量完之后再按原位置量 —— 简单做法是**分块处理**：
+#       把文本按围栏切成「代码段 / 非代码段」，只在非代码段里找小节。
+#
+# 这里用最稳的做法：**先把围栏块替换成等长空白**，
+# 这样所有偏移量、行号、位置都保持不变 —— 量出来的正文仍然是原文。
+
+_FENCE_RE = re.compile(r'(?ms)^```.*?^```\s*$|^```.*?\Z')
+
+
+def _blank_fences(txt):
+    """把围栏代码块替换成等长空白（保持长度与行数不变）。"""
+    def repl(m):
+        return ''.join('\n' if c == '\n' else ' ' for c in m.group(0))
+    return _FENCE_RE.sub(repl, txt)
+
+
 SEC_RE = re.compile(
     r'^(## (?:📚 每日学习|🪞 每日反思)[^\n]*\n)(.*?)' + _SEC_END,
     re.M | re.S)
@@ -206,7 +232,9 @@ def trim_body(body: str, kind: str = '📚 每日学习'):
 
 def check_file(path):
     txt = Path(path).read_text(encoding='utf-8')
-    m = SEC_RE.search(txt)
+    # ⚠️ 先剥掉围栏代码块 —— 否则**举例用的标题**会被当成真标题
+    #    （2026-11-03 实测：更正记录里的 ```## 🪞 每日反思（三问）``` 被误认）
+    m = SEC_RE.search(_blank_fences(txt))
     if not m:
         print(f"FAIL {path} 里找不到「每日学习/每日反思」小节")
         return 1
@@ -221,7 +249,7 @@ def check_file(path):
 def apply_file(path, draft_path):
     p = Path(path)
     txt = p.read_text(encoding='utf-8')
-    m = SEC_RE.search(txt)
+    m = SEC_RE.search(_blank_fences(txt))
     if not m:
         print(f"FAIL {path} 里找不到目标小节")
         return 1
