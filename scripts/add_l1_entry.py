@@ -49,6 +49,53 @@ def eid_of(n: int) -> str:
     return f"E{n}"
 
 
+def peel_body(text: str, eid: str) -> tuple[str, str | None]:
+    """从独立文件里剥出「正文」（不含标题行和「本条讲」行）。
+
+    ⚠️ 2026-11-04 修复（E61）：旧实现只剥掉**标题后紧邻的那一行**「本条讲」，
+    作者若写了第二行（E60 就是这样），第二行会残留进 body，
+    再叠加 `sync_main_lib` 的无条件注入 → 主库出现 3 行「本条讲」。
+
+    修法：剥完标题行后，把**所有**「本条讲」行一次性清掉（无论有几行）。
+
+    ⚠️ 第二处修正（同日）：**关键词不能被剥掉后丢失** ——
+    旧流程是「先剥 → 再组装」，剥掉的关键词没传给组装函数，
+    组装时只能退回用标题 → **作者原话被标题覆盖**（E58 实测被改写）。
+    → 改成返回 (body, kw)，把剥下来的关键词**传下去**。
+
+    返回：(正文, 剥下来的第一行关键词 或 None)
+    """
+    # 1) 剥标题行（容忍中间任意空白）
+    body = re.sub(rf"^###\s*{re.escape(eid)}[：:].*$\n+", "", text, flags=re.M)
+    # 2) 剥**所有**「本条讲」行（含空行），但记住第一行内容
+    found = re.findall(r"^>\s*本条讲：\*\*(.+?)\*\*\s*$", body, flags=re.M)
+    body = re.sub(r"^>\s*本条讲：\*\*.*?\*\*\s*$\n*", "", body, flags=re.M)
+    kw = found[0].strip() if found else None
+    return body.strip(), kw
+
+
+def build_block(eid: str, title: str, entry_body: str | None,
+                keyword: str | None = None) -> str:
+    """组装主库条目块 —— 保证**恰好一行**「本条讲」。
+
+    ⚠️ 2026-11-04 修复（E61）：旧实现无条件前置 `> 本条讲：**{title}**`，
+    而 body 里往往已经有一行作者的「本条讲」→ 主库变成 2~3 行。
+
+    修法：
+    1. 优先用 `keyword`（从独立文件剥下来的**作者原话**）
+    2. body 里残留的「本条讲」行也剥掉（兜底，正常路径已剥干净）
+    3. 一行都没拿到 → 才用标题补一行
+    """
+    heading = f"### {eid}：{title}"
+    body = (entry_body or "").strip()
+    # 兜底：剥掉 body 里可能残留的「本条讲」行
+    found = re.findall(r"^>\s*本条讲：\*\*(.+?)\*\*\s*$", body, flags=re.M)
+    body = re.sub(r"^>\s*本条讲：\*\*.*?\*\*\s*$\n*", "", body, flags=re.M).strip()
+    kw = (keyword or "").strip() or (found[0].strip() if found else "") or title.strip()
+    body = f"> 本条讲：**{kw}**\n\n{body}" if body else f"> 本条讲：**{kw}**"
+    return f"{heading}\n\n{body}\n"
+
+
 def extract_title_kw(text: str):
     """从正文里提取标题和关键词。优先用已有的规范格式；没有就退化到首个 H1/H2。"""
     m = re.search(r"^###\s*E\d+[：:]\s*(.+)$", text, re.M)
@@ -109,7 +156,8 @@ def ensure_entry_file(path: Path, eid: str, title: str, kw: str) -> bool:
     return False
 
 
-def sync_main_lib(eid: str, title: str, entry_body: str | None) -> bool:
+def sync_main_lib(eid: str, title: str, entry_body: str | None,
+                  keyword: str | None = None) -> bool:
     """把条目同步进主库 + 更新头部声明。"""
     if not MAIN_LIB.exists():
         print(f"❌ 主库不存在: {MAIN_LIB}")
@@ -118,9 +166,9 @@ def sync_main_lib(eid: str, title: str, entry_body: str | None) -> bool:
     orig = text
 
     heading = f"### {eid}：{title}"
-    body = entry_body.strip() if entry_body else ""
-    # 组装主库条目：标题 + 「本条讲」行 + 正文
-    block = f"{heading}\n\n> 本条讲：**{title}**\n\n{body}\n" if body else f"{heading}\n\n> 本条讲：**{title}**\n"
+    # ⚠️ 2026-11-04（E61）：改用 build_block —— 保证恰好一行「本条讲」，
+    #    并把作者原话关键词传下去（不被标题覆盖）
+    block = build_block(eid, title, entry_body, keyword)
 
     # 若主库已有该条目 → 替换；否则追加
     pat = re.compile(rf"^###\s*{re.escape(eid)}[：:].*?(?=^###\s*E\d+[：:]|\Z)",
@@ -203,13 +251,13 @@ def main():
     #    **标题行残留在 body 里** → 主库出现嵌套 `### E<n>：` →
     #    下次 sync 的替换正则按「下一个 E\d+ 标题」截断 → **一条变三条**。
     #    修法：显式允许任意空白；并额外校验 body 里不应再出现同级标题。
-    body = re.sub(rf"^###\s*{re.escape(eid)}[：:].*$\n+\s*^> 本条讲：\*\*.+?\*\*\s*$",
-                  "", text, flags=re.M).strip()
-    body = re.sub(rf"^###\s*{re.escape(eid)}[：:].*$\n+", "", text, flags=re.M).strip()
+    # ⚠️ 2026-11-04（E61）：改用 peel_body —— 剥掉**所有**「本条讲」行，
+    #    不再只剥标题后紧邻的那一行（E60 主库因此出现 3 行）。
+    body, kw = peel_body(text, eid)
     if re.search(rf"^###\s*E\d+[：:]", body, re.M):
         print(f"❌ 正文里仍残留条目标题行，终止（避免主库产生重复条目）")
         sys.exit(1)
-    if sync_main_lib(eid, title, body):
+    if sync_main_lib(eid, title, body, kw):
         changed.append("主库条目 + 头部声明")
 
     n_files = len(list(ENTRIES.glob("E*.md")))
