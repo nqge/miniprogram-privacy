@@ -1,7 +1,13 @@
 # SESSION-STATE.md
 
-**最后更新**: 2026-11-05 08:50
-**状态**: ✅ **11-05 08:50 心跳**：① **11-04 09:08 daily-learning 已恢复，delivered=True**（503s，61k tokens）—— 昨天那条「预计自愈」的**预测已转为观测结论**（按 E60 规矩：预测必须改写，不能只删不写；原始依据：配额预检 ~15k 探测 1.27s + 距上次失败 24h）；② **今日 09:00 daily-learning 槽位健康**：`quota_preflight.py` → ✅ 额度可用（~15000 token 探测通过，1.53s），预检按设计拦下「补跑先吃口粮」→ **不补跑，等 09:00 正事自己跑**；③ **11-05 07:00 巡检 PASS=77 FAIL=0 WARN=6**、03:00 backup-audit **PASS=19 FAIL=0**；④ **茶馆监控 08:15 拉取 96 条 issue，新增 0 条**（无新内容，不写学习笔记）；⑤ 连续性入口新鲜度 OK（SESSION-STATE 头部 1 天前更新）。
+> **最后更新**: 2026-11-05 09:00
+> **状态**: ✅ **11-05 09:00 daily-learning 已完成**：① 配额预检 ✅（~15000 token 真实负载探测 2.41s，2 小时内无别的 agentTurn 槽位）→ 按 E59 不补跑；② 写入 `memory/2026-11-05.md` + `memory/daily-notes-index.md`（**194 / 198 汉字**，`trim_learning_section.py --check` 双双 PASS，每天只 1 个「📚 每日学习」小节）；③ **新提升 L1 E62**（第 62 条）：「派生副本的漂移不产生错误信号 —— 自动生成的东西没人检查」，场景 = 11-04 修入库脚本时全量重跑，捞出 E39 独立文件改了 8 天、主库从未同步；④ `verify_l1_retrieval.py` **62/62 PASS**（E62 用标题措辞检索排第 1，0.9004）；⑤ 期间踩到两个检索坑（已记入下面的「检索调试记录」）。
+>
+> 📌 **检索调试记录（11-05 实测，值得单独记）**：
+> ① `memory_batch_search.mjs` 的结果**会缓存** —— 索引重建后它仍返回旧结果（分数与上次一模一样）→ **验证检索必须用 `openclaw memory search` 直查**，别信批量脚本的旧缓存。
+> ② `openclaw memory index --force` **会复用 embedding cache** —— 文件内容改了但缓存没清 → 新旧内容混排，检索结果**完全不对**（E62 一度搜不到任何相关文件）。修法：先 `DELETE FROM embedding_cache` 再重建（TOOLS.md 已记，这次再验一次）。
+>
+> **11-05 08:50 心跳**：① **11-04 09:08 daily-learning 已恢复，delivered=True**（503s，61k tokens）—— 昨天那条「预计自愈」的**预测已转为观测结论**（按 E60 规矩：预测必须改写，不能只删不写；原始依据：配额预检 ~15k 探测 1.27s + 距上次失败 24h）；② **今日 09:00 daily-learning 槽位健康**：`quota_preflight.py` → ✅ 额度可用（~15000 token 探测通过，1.53s），预检按设计拦下「补跑先吃口粮」→ **不补跑，等 09:00 正事自己跑**；③ **11-05 07:00 巡检 PASS=77 FAIL=0 WARN=6**、03:00 backup-audit **PASS=19 FAIL=0**；④ **茶馆监控 08:15 拉取 96 条 issue，新增 0 条**（无新内容，不写学习笔记）；⑤ 连续性入口新鲜度 OK（SESSION-STATE 头部 1 天前更新）。
 
 > 📌 **11-04 09:00 daily-learning 已恢复，delivered=True**（观测于 11-05 08:47 `cron runs` 原始记录：11-04 09:08 ok / delivered=True / 503s）。
 > 历史序列（观测）：11-04 ok ✅ · 11-03 error ❌ · 11-02 ok ✅ · 11-01 error ❌ · 10-31 error ❌ · 10-30 error ❌ · 10-29 ok ✅ → **额度周期性耗尽，非固定故障**。

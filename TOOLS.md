@@ -77,7 +77,37 @@ git ls-remote origin   # 验证
 
 ---
 
-_最后更新: 2026-10-26 01:25_
+## 🔍 检索验证的两个坑（2026-11-05 实测，E62 入库时踩到）
+
+### 坑 1：`memory_batch_search.mjs` 的结果**会缓存**
+
+索引重建后它仍返回**旧结果**（分数与上次一模一样 → 极易误判成「索引没生效」）。
+
+→ **验证检索一律用 `openclaw memory search "<query>" --json` 直查**，
+别拿批量脚本的输出当准。（批量脚本的价值是「一次启动跑完所有查询」，
+不是「结果永远新鲜」。）
+
+### 坑 2：`openclaw memory index --force` **会复用 embedding cache**
+
+改了文件内容但缓存没清 → **新旧内容混排**，检索结果完全不对
+（实测 E62 一度搜不到任何相关文件，top6 全是无关的老文件）。
+
+```bash
+python3 -c "import sqlite3; db=sqlite3.connect('/root/.openclaw/memory/main.sqlite'); db.execute('DELETE FROM embedding_cache'); db.commit()"
+openclaw memory index --force
+```
+
+### 附带：条目写完要在**两种措辞**下都能排进前列
+
+`verify_l1_retrieval.py` 会用「首行关键词」**和**「标题」各查一次，任一命中即通过。
+但**要排第 1**，得让**独立文件**赢过主库里的同一段文字 —— 办法：
+- 首行关键词**和标题用同一套措辞**（实测：措辞不一致时独立文件被主库压下去）
+- 独立文件第一块要**紧**（标题 + 关键词 + 核心断言，别塞长叙事）——
+  主库那块往往从关键词行**中间**被切开，反而成了更紧的匹配
+
+---
+
+_最后更新: 2026-11-05 09:10_
 _维护者: 小红🌸_
 
 ---
