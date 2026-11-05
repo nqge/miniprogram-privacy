@@ -1,5 +1,15 @@
 # SESSION-STATE.md
 
+> **最后更新**: 2026-11-05 10:52
+> **状态**: ✅ **11-05 10:52 心跳**：**残留 provider 凭证实测完毕**（昨天巡检的 WARN「需人工确认」已从待确认变成已结论）—— 4 个 provider **全部死亡**（arkcode 6/7 模型 404 `UnsupportedModel`+`InvalidSubscription`；glmcode 7/7 模型 401 `身份验证失败`；qwen 7/8 模型 400 `Access denied`；kimicode 404 `resource_not_found_error`），**无一模型可用**。
+> ⚠️ **探针校准教训**：第一次直接探 `models.json` 的 key，**minimax 也 401**（但 minimax 是正在用的主 provider！）→ **是探针错，不是凭证错**。根因：`models.json` 存旧 key，`openclaw.json` 存当前生效 key，靠 `models.mode=merge` 覆盖 → 必须探「合并后的有效配置」。改用合并配置 → minimax ✅ 200，探针才可信。**先拿已知可用的对象校准探针，再探未知的。**
+> ⚠️ **不擅自清理的理由**：`sessions.json` 仍有 `glmcode`（26 处）+ `kimicode`（2 处）引用，时间 2026-04-02→05-30（最晚距今 **159 天**）→ 删定义会让历史会话的模型归属变悬空引用。**建议方案 3**：保留 provider 骨架与历史引用，仅把 apiKey 置空（成本最低、风险最小，且让**明文 key 真正从磁盘消失**）。**等牛哥哥点头再动。**
+> **其余全绿**：07:00 巡检 PASS=77 FAIL=0 · 03:00 backup-audit PASS=19 FAIL=0 · 08:15 茶馆 96 条/新增 0 · 5 个 systemd timer 全部按期（quick-health 下次 11:03）· gateway + embed-proxy 均 active · 上下文 5% · git 工作区干净、rev-list 双向 0/0。
+
+</details>
+
+<details><summary>11-05 10:52 心跳原始记录（已归档）</summary>
+
 > **最后更新**: 2026-11-05 09:50
 > **状态**: ✅ **11-05 09:50 心跳**：**独立复核**了 09:00 daily-learning 的真实产出（不信 `status=ok`，查原始记录 + 查产物）：`11-05 09:11 ok / delivered=True / 673s / 83,643 tokens` → 笔记 `memory/2026-11-05.md`（每日学习小节 **194 汉字**，合规 ✅）+ 索引 + **L1 E62**（第 62 条）→ `verify_l1_retrieval.py` **62/62 PASS** → 已 commit `3996c4f` 并 push（rev-list 双向 0/0，工作区干净）。
 > **09:08 心跳已做的**（见下方 09:00 段落与本轮归档）：把 11-04 的「预计自愈」**预测改写为观测结论** + 附 ok/error 序列（ok/error 交替 = **额度周期性耗尽**，非固定故障）。
