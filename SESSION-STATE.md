@@ -1,6 +1,11 @@
 # SESSION-STATE.md
 
-> **最后更新**: 2026-11-05 10:52
+> **最后更新**: 2026-11-06 09:00
+> **状态**: ✅ **11-06 09:00 daily-learning 已完成**：① 配额预检 ✅（~15000 token 真实负载探测 2.41s，2 小时内无 agentTurn 槽位）→ 可跑；② 写入 `memory/2026-11-06.md`（**178 汉字**）+ `memory/daily-notes-index.md`（**198 汉字**），`trim_learning_section.py --check` 双双 PASS，每天只 1 个「📚 每日学习」小节；③ **新提升 L1 E63**（第 63 条）：「**先拿已知可用的对象校准探针 —— 探针错了会被误报成「全挂了」**」，来源 = 11-05 残留 provider 凭证实测中「探 `models.json` 旧 key 导致 minimax 也 401」的误报；④ `verify_l1_retrieval.py` **63/63 PASS**；⑤ 期间踩到两个坑（**均已修**）：`trim_learning_section.py --from` **会剥掉 `## ` 小节标题、只输出正文**（对裸小节草稿用 `--from` 会丢标题；正解是 `--apply` 或把标题+正文一起喂）→ 改用「标题+正文合并成单段」一次收敛到 174 汉字；L1 独立文件首行必须是 **`### E63：` + 紧邻的 `> 本条讲：`**（`#` 标题或中间空行都会让检索排不进前列，见 E17）。
+> **自愈检查**：11-04 / 11-05 的「📚 每日学习」小节均存在且各只有 1 个 → **无需补记**。
+> **检索调试记录**：重建索引时 `openclaw memory index --force` 连续两次 **502 rate limit exceeded(RPM)**（MiniMax 侧）→ 间隔 ~45s 重试即成功；**先 `DELETE FROM embedding_cache` 再重建**（否则新旧内容混排，TOOLS.md 已记）。
+
+<details><summary>11-05 10:52 心跳原始记录（已归档）</summary>
 > **状态**: ✅ **11-05 10:52 心跳**：**残留 provider 凭证实测完毕**（昨天巡检的 WARN「需人工确认」已从待确认变成已结论）—— 4 个 provider **全部死亡**（arkcode 6/7 模型 404 `UnsupportedModel`+`InvalidSubscription`；glmcode 7/7 模型 401 `身份验证失败`；qwen 7/8 模型 400 `Access denied`；kimicode 404 `resource_not_found_error`），**无一模型可用**。
 > ⚠️ **探针校准教训**：第一次直接探 `models.json` 的 key，**minimax 也 401**（但 minimax 是正在用的主 provider！）→ **是探针错，不是凭证错**。根因：`models.json` 存旧 key，`openclaw.json` 存当前生效 key，靠 `models.mode=merge` 覆盖 → 必须探「合并后的有效配置」。改用合并配置 → minimax ✅ 200，探针才可信。**先拿已知可用的对象校准探针，再探未知的。**
 > ⚠️ **不擅自清理的理由**：`sessions.json` 仍有 `glmcode`（26 处）+ `kimicode`（2 处）引用，时间 2026-04-02→05-30（最晚距今 **159 天**）→ 删定义会让历史会话的模型归属变悬空引用。**建议方案 3**：保留 provider 骨架与历史引用，仅把 apiKey 置空（成本最低、风险最小，且让**明文 key 真正从磁盘消失**）。**等牛哥哥点头再动。**
