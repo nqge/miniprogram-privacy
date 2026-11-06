@@ -1,7 +1,19 @@
 # SESSION-STATE.md
 
+> **最后更新**: 2026-11-06 15:54
+> **状态**: ✅ **11-06 15:54 心跳：额度耗尽再次实证（已自愈）**。**14:25 / 14:56 / 14:56 三轮 quick-health FAIL=3（可处理 2）**，根因 = `HTTP 429 rate_limit_error`「已达到 Token Plan 用量上限（2056）」→ 巡检判「**没有任何可用 provider**」→ **OnFailure 告警链路按设计触发**（15:27 `发送: code=0 msg=success`）。**15:27 起自动恢复**：探针回到 `minimax 可用（HTTP 200）`，FAIL 回落为 1（仅长期项）。→ 证实额度是**周期性耗尽 + 自动恢复**，非永久故障。
+> ⚠️ **新认知（比此前更细）**：之前以为额度耗尽只发生在 agentTurn 任务里，现证实 **30 分钟巡检的 provider 探针同样会被 429 打到** → **巡检的 FAIL 计数会被额度波动污染**；14:25–15:20 的 FAIL=3 **不是新故障**，是同一个额度问题在巡检侧的投影。**读巡检日志必须看 FAIL 的根因行，不能只看计数。**
+> ⚠️ **本次 429 恰好证明了【M】**：额度耗尽时 **fallback 也会 429**（同 provider 同账号）→ **「配了 fallback」≠「有容灾」**。
+> **其余全绿**：07:00 巡检 PASS=77 FAIL=0 · 03:00 backup-audit PASS=19 FAIL=0 · 12:15 茶馆 96 条/新增 0 · 5 个 timer 全部按期 · gateway + embed-proxy 均 active · 记忆索引 89/653 Dirty=no · 上下文 6% · git rev-list 双向 0/0（唯一变动 `memory/teahouse_state.json` 的 `last_check` 时间戳 = 监控自身运行时状态，正常）。
+> **仍需牛哥哥本人决策的长期项（未变）**：MiniMax Token Plan 额度周期性耗尽（**本次已再次实证**，充值/升级 或 加第二把 key 拆配额）· fallback 链同账号 → 兜底无效（【M】）· 4 个死亡 provider 凭证待清理（方案 3：保留骨架、仅置空 apiKey，**等牛哥哥点头**）。
+
+<details><summary>11-06 09:53 心跳原始记录</summary>
+
 > **最后更新**: 2026-11-06 09:53
-> **状态**: ✅ **11-06 09:53 心跳（复核，非复述）**：**独立复核了 09:00 daily-learning 的真实产出**（不信 `status=ok`，查 cron runs 原始记录 + 查产物 + 重跑验证）→ `11-06 09:03 ok / delivered=True / 625s / 62,397 tokens` → 笔记 `memory/2026-11-06.md`（**178 汉字**）+ `memory/daily-notes-index.md`（**198 汉字**，与日记正文逐字一致）→ **L1 E63**（第 63 条）→ 我方重跑 `verify_l1_retrieval.py` → **63/63 PASS**（含 E63 ✅ PASS）→ 已 commit `ad97e06` 并 push（rev-list 双向 0/0，`git status` 干净）→ **全部属实**。
+> **状态**: ✅ **11-06 09:53 心跳（复核，非复述）**：</new_string><old_string># SESSION-STATE.md
+
+> **最后更新**: 2026-11-06 09:53
+> **状态**: ✅ **11-06 09:53 心跳（复核，非复述）**：</old_string>**独立复核了 09:00 daily-learning 的真实产出**（不信 `status=ok`，查 cron runs 原始记录 + 查产物 + 重跑验证）→ `11-06 09:03 ok / delivered=True / 625s / 62,397 tokens` → 笔记 `memory/2026-11-06.md`（**178 汉字**）+ `memory/daily-notes-index.md`（**198 汉字**，与日记正文逐字一致）→ **L1 E63**（第 63 条）→ 我方重跑 `verify_l1_retrieval.py` → **63/63 PASS**（含 E63 ✅ PASS）→ 已 commit `ad97e06` 并 push（rev-list 双向 0/0，`git status` 干净）→ **全部属实**。
 > **今日巡检**：07:00 PASS=77 FAIL=0 WARN=6 · 03:00 backup-audit PASS=19 FAIL=0 · 茶馆无新摘要（上次原始摘要 10-26，【I】显示已全部蒸馏）· 上下文 4% · 09:53 配额预检 ✅ 额度可用、无补跑需求。
 > **无「可处理」故障**。仍需牛哥哥本人决策的**长期项**（未变）：MiniMax Token Plan 额度周期性耗尽（充值/升级 或 加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理（方案 3：保留骨架、仅置空 apiKey，**等牛哥哥点头**）。
 
