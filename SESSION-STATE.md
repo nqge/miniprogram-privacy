@@ -1,7 +1,17 @@
 # SESSION-STATE.md
 
+> **最后更新**: 2026-11-06 09:53
+> **状态**: ✅ **11-06 09:53 心跳（复核，非复述）**：**独立复核了 09:00 daily-learning 的真实产出**（不信 `status=ok`，查 cron runs 原始记录 + 查产物 + 重跑验证）→ `11-06 09:03 ok / delivered=True / 625s / 62,397 tokens` → 笔记 `memory/2026-11-06.md`（**178 汉字**）+ `memory/daily-notes-index.md`（**198 汉字**，与日记正文逐字一致）→ **L1 E63**（第 63 条）→ 我方重跑 `verify_l1_retrieval.py` → **63/63 PASS**（含 E63 ✅ PASS）→ 已 commit `ad97e06` 并 push（rev-list 双向 0/0，`git status` 干净）→ **全部属实**。
+> **今日巡检**：07:00 PASS=77 FAIL=0 WARN=6 · 03:00 backup-audit PASS=19 FAIL=0 · 茶馆无新摘要（上次原始摘要 10-26，【I】显示已全部蒸馏）· 上下文 4% · 09:53 配额预检 ✅ 额度可用、无补跑需求。
+> **无「可处理」故障**。仍需牛哥哥本人决策的**长期项**（未变）：MiniMax Token Plan 额度周期性耗尽（充值/升级 或 加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理（方案 3：保留骨架、仅置空 apiKey，**等牛哥哥点头**）。
+
+<details><summary>11-06 09:00 daily-learning 原始记录</summary>
+
 > **最后更新**: 2026-11-06 09:00
-> **状态**: ✅ **11-06 09:00 daily-learning 已完成**：① 配额预检 ✅（~15000 token 真实负载探测 2.41s，2 小时内无 agentTurn 槽位）→ 可跑；② 写入 `memory/2026-11-06.md`（**178 汉字**）+ `memory/daily-notes-index.md`（**198 汉字**），`trim_learning_section.py --check` 双双 PASS，每天只 1 个「📚 每日学习」小节；③ **新提升 L1 E63**（第 63 条）：「**先拿已知可用的对象校准探针 —— 探针错了会被误报成「全挂了」**」，来源 = 11-05 残留 provider 凭证实测中「探 `models.json` 旧 key 导致 minimax 也 401」的误报；④ `verify_l1_retrieval.py` **63/63 PASS**；⑤ 期间踩到两个坑（**均已修**）：`trim_learning_section.py --from` **会剥掉 `## ` 小节标题、只输出正文**（对裸小节草稿用 `--from` 会丢标题；正解是 `--apply` 或把标题+正文一起喂）→ 改用「标题+正文合并成单段」一次收敛到 174 汉字；L1 独立文件首行必须是 **`### E63：` + 紧邻的 `> 本条讲：`**（`#` 标题或中间空行都会让检索排不进前列，见 E17）。
+> **状态**: ✅ **11-06 09:00 daily-learning 已完成**</newString><old_string># SESSION-STATE.md
+
+> **最后更新**: 2026-11-06 09:00
+> **状态**: ✅ **11-06 09:00 daily-learning 已完成**</old_string>：① 配额预检 ✅（~15000 token 真实负载探测 2.41s，2 小时内无 agentTurn 槽位）→ 可跑；② 写入 `memory/2026-11-06.md`（**178 汉字**）+ `memory/daily-notes-index.md`（**198 汉字**），`trim_learning_section.py --check` 双双 PASS，每天只 1 个「📚 每日学习」小节；③ **新提升 L1 E63**（第 63 条）：「**先拿已知可用的对象校准探针 —— 探针错了会被误报成「全挂了」**」，来源 = 11-05 残留 provider 凭证实测中「探 `models.json` 旧 key 导致 minimax 也 401」的误报；④ `verify_l1_retrieval.py` **63/63 PASS**；⑤ 期间踩到两个坑（**均已修**）：`trim_learning_section.py --from` **会剥掉 `## ` 小节标题、只输出正文**（对裸小节草稿用 `--from` 会丢标题；正解是 `--apply` 或把标题+正文一起喂）→ 改用「标题+正文合并成单段」一次收敛到 174 汉字；L1 独立文件首行必须是 **`### E63：` + 紧邻的 `> 本条讲：`**（`#` 标题或中间空行都会让检索排不进前列，见 E17）。
 > **自愈检查**：11-04 / 11-05 的「📚 每日学习」小节均存在且各只有 1 个 → **无需补记**。
 > **检索调试记录**：重建索引时 `openclaw memory index --force` 连续两次 **502 rate limit exceeded(RPM)**（MiniMax 侧）→ 间隔 ~45s 重试即成功；**先 `DELETE FROM embedding_cache` 再重建**（否则新旧内容混排，TOOLS.md 已记）。
 
