@@ -465,6 +465,50 @@ if never_ok:
 else:
     print("PASS 没有「计划槽位 0 次成功」的任务")
 
+# ── 3) daily-notes-index.md 有没有漏掉某天的学习笔记 ──
+# daily-learning 要求「两处写入」：当日笔记 + 索引。
+# 上面第 1 条只查了当日笔记文件，**索引那一路没查** → 索引漏写不会被发现。
+#
+# ⚠️ 范围：只查**索引自己覆盖的区间**。
+# 索引是 2026-11-03 才建的（起点 2026-10-26），更早的笔记从来就不在索引里 ——
+# 拿「索引里有没有 2026-05-30」去判会得到一堆**假阳性**。
+IDX = os.path.join(WS, 'memory', 'daily-notes-index.md')
+if os.path.exists(IDX):
+    try:
+        idx_text = open(IDX, encoding='utf-8', errors='replace').read()
+        idx_dates = set(re.findall(r'(20\d\d-\d\d-\d\d)', idx_text))
+        # 索引覆盖起点 = 它内容里最早的日期（索引建立之前的笔记不算缺失）
+        idx_start = min(idx_dates) if idx_dates else None
+        # 从日记侧反推：最近 7 天里，哪些日期有「📚 每日学习」小节
+        cutoff_date = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
+        idx_missing = []
+        mem_dir = os.path.join(WS, 'memory')
+        for fn in sorted(os.listdir(mem_dir)):
+            if not re.fullmatch(r'20\d\d-\d\d-\d\d\.md', fn):
+                continue
+            day = fn[:-3]
+            if day < cutoff_date:
+                continue
+            if idx_start and day < idx_start:
+                continue          # 索引建立之前 —— 不算缺失
+            try:
+                body = open(os.path.join(mem_dir, fn), encoding='utf-8', errors='replace').read()
+            except Exception:
+                continue
+            if '📚 每日学习' in body and day not in idx_dates:
+                idx_missing.append(day)
+        if idx_missing:
+            failed += 1
+            print(f"FAIL 索引漏写了 {len(idx_missing)} 天的学习笔记（当日笔记里有，索引里没有）")
+            for day in idx_missing[-8:]:
+                print(f"FAIL   {day} 在 memory/{day}.md 有「📚 每日学习」小节，但 daily-notes-index.md 里没有")
+        else:
+            print("PASS 索引覆盖了最近所有含学习小节的日期")
+    except Exception as e:
+        print(f"WARN 索引一致性检查读取失败（{type(e).__name__}），非失败")
+else:
+    print("WARN 找不到 memory/daily-notes-index.md，非失败")
+
 print(f"__A2_FAILED__={failed}")
 PY_A2
 )
