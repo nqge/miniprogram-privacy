@@ -314,6 +314,169 @@ cron_pass_count=$(printf '%s\n' "$cron_out" | grep -c '^PASS')
 cron_pass_count=${cron_pass_count:-0}
 PASS=$((PASS + cron_pass_count - cron_fail))
 
+# ── A2. 产出落地核验（防「声称写了但其实没写」）────────────────────────
+# 2026-11-09 加（E68）：
+#   daily-reflection 跑了 46 次、计划槽位 0 次成功。
+#   翻 run 记录发现：16 次运行「声称已写入 memory/YYYY-MM-DD.md」，
+#   **文件真实存在的只有 3 次** —— 13 份正文随会话一起丢了。
+#   而这些 run 的 status 都是 error → 报告里只写「昨天运行失败（接口限流）」，
+#   读起来像偶发故障，**没人发现这个任务 6 个月没产出过任何东西**。
+#
+#   E58 早就诊断出「计划槽位成功率 0%」，但只改了报告口径，**没改任务本身** →
+#   又挂了 5 天。**诊断不是修复。**
+#
+# 这条断言做两件事：
+#   1) 找出「summary 声称写了某个 memory/*.md，但该文件不存在」的 run
+#   2) 找出「符合调度规律的计划槽位里，一次都没成功过」的任务
+#
+# 为什么不能只看 status：status=error 盖住了两种完全不同的情况 ——
+#   「没做成」 vs 「做成了但没落盘」。要区分它们，只能查文件系统。
+echo ""
+echo "【A2】产出落地核验（防「声称写了但没写」）"
+
+a2_report=$(python3 - << 'PY_A2' 2>/dev/null
+import json, os, re, glob, datetime
+
+RUNS = '/root/.openclaw/cron/runs'
+WS = '/root/.openclaw/workspace'
+JOBS = '/root/.openclaw/cron/jobs.json'
+failed = 0
+
+# ── 只看**当前还活着**的 job ──
+# 历史 job（已删除的）的产出缺失是正常的 —— 那时的数据早被合并/清理，
+# 报出来只是噪音，反而会让人忽略真正的信号（这是 E66 的「假警报驯化」）。
+try:
+    d = json.load(open(JOBS, encoding='utf-8'))
+    jobs = d if isinstance(d, list) else d.get('jobs', [])
+except Exception:
+    jobs = []
+alive = {j.get('id'): (j.get('name'), j.get('schedule', {}).get('expr', '')) for j in jobs}
+
+# 从 cron 表达式里取「计划小时」：'0 9 * * *' → 9；'0 22 * * 0' → 22
+def sched_hours(expr):
+    parts = str(expr).split()
+    if len(parts) < 2:
+        return set()
+    try:
+        m = parts[0]
+        h = parts[1]
+        if m.startswith('*/'):
+            step = int(m[2:])
+            return set(range(0, 24, step))
+        if ',' in h:
+            out = set()
+            for seg in h.split(','):
+                out.add(int(seg))
+            return out
+        if '-' in h:
+            a, b = h.split('-')
+            return set(range(int(a), int(b) + 1))
+        return {int(h)}
+    except Exception:
+        return set()
+
+# ── 1) 声称写了某个 memory/*.md，但文件不存在 ──
+# 只看**最近 7 天**的 run —— 历史丢失已经无法挽回，天天报只会变成噪音
+# （E66 的「假警报驯化」：一个每天出现、没人细看的失败，会训练出划走的习惯）。
+# 真正要抓的是「**还在发生**的丢失」。
+RECENT_DAYS = 7
+# ⚠️ run 记录里的 ts 是**毫秒**（如 1794146652951），不是秒 —— 单位搞错的话
+# 每个 ts 都比 cutoff 大（看着像「未来」），于是 7 天的窗口会变成「全部历史都算」，
+# 断言就退化成天天报历史旧账。
+cutoff = (datetime.datetime.now().timestamp() - RECENT_DAYS * 86400) * 1000
+claimed_missing = []
+for jid, (jname, expr) in alive.items():
+    f = f'{RUNS}/{jid}.jsonl'
+    if not os.path.exists(f):
+        continue
+    try:
+        lines = open(f, encoding='utf-8', errors='replace').read().strip().split('\n')
+    except Exception:
+        continue
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get('status') == 'ok':
+            continue
+        ts = d.get('ts')
+        if not isinstance(ts, (int, float)) or ts < cutoff:
+            continue
+        s = str(d.get('summary') or '')
+        if not s:
+            continue
+        for m in re.findall(r'(20\d\d-\d\d-\d\d)\.md', s):
+            p = os.path.join(WS, 'memory', f'{m}.md')
+            if not os.path.exists(p):
+                when = datetime.datetime.fromtimestamp(ts / 1000).strftime('%Y-%m-%d %H:%M')
+                claimed_missing.append((jid[:8], jname, m, when))
+
+if claimed_missing:
+    uniq = {}
+    for jid, jname, m, when in claimed_missing:
+        uniq.setdefault((jid, jname, m), when)
+    failed += 1
+    print(f"FAIL {len(uniq)} 次运行声称写入了文件，但文件不存在（正文随会话丢失）")
+    for (jid, jname, m), when in sorted(uniq.items(), key=lambda x: x[1])[-8:]:
+        print(f"FAIL   {when} {jname}({jid}) 声称写入 memory/{m}.md → 文件不存在")
+else:
+    print("PASS 所有失败运行都没有「声称写了但文件不存在」的记录")
+
+# ── 2) 符合调度规律的计划槽位里，一次都没成功过 ──
+# 手动补跑会掩盖「计划任务从没成功过」的真相（E58 的第 3 步）。
+# 判据用**计划小时**对齐，不是「整点」—— 实际启动会延迟几分钟（09:00 的 job 记在 09:12），
+# 而手动补跑常落在非计划小时（历史上是 04:27 / 00:35 / 08:52 / 09:22）。
+never_ok = []
+for jid, (jname, expr) in alive.items():
+    f = f'{RUNS}/{jid}.jsonl'
+    if not os.path.exists(f):
+        continue
+    hours = sched_hours(expr)
+    if not hours:
+        continue
+    try:
+        lines = open(f, encoding='utf-8', errors='replace').read().strip().split('\n')
+    except Exception:
+        continue
+    scheduled = 0
+    sched_ok = 0
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        ts = d.get('ts')
+        if not isinstance(ts, (int, float)):
+            continue
+        dt = datetime.datetime.fromtimestamp(ts / 1000)
+        if dt.hour not in hours:
+            continue
+        scheduled += 1
+        if d.get('status') == 'ok':
+            sched_ok += 1
+    if scheduled >= 3 and sched_ok == 0:
+        never_ok.append((jid, jname, scheduled))
+
+if never_ok:
+    failed += 1
+    for jid, jname, n in never_ok:
+        print(f"FAIL {jname}({jid}) 的 {n} 次计划槽位里 0 次成功 —— 从没产出过")
+else:
+    print("PASS 没有「计划槽位 0 次成功」的任务")
+
+print(f"__A2_FAILED__={failed}")
+PY_A2
+)
+a2_fail=$(echo "$a2_report" | grep -oP '__A2_FAILED__=\K[0-9]+')
+a2_fail=${a2_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$a2_report"
+
 # ── E. 凭证暴露面 ─────────────────────────────────
 echo ""
 echo "【E】凭证暴露面"
