@@ -8,6 +8,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import datetime
@@ -129,6 +130,53 @@ def _max_consecutive_errors(runs):
     return best
 
 
+def _is_quota_exhausted(err: str) -> bool:
+    """判断这个 rate limit 是不是**账号级额度耗尽**（需要牛哥哥充值）。
+
+    为什么不认字面量（2026-11-09 实测）：
+      额度耗尽的报错**措辞会变**。11-02 是「Token Plan 用量上限」，
+      11-08 变成「⚠️ API rate limit reached. Please try again later. (rate_limit)」。
+      → 认字面量的匹配器会**静默漏判**，把长期项误报成「可处理」。
+
+    为什么认「全部模型同时中招」：
+      - 账号级额度耗尽 → 该账号下**所有**候选模型一起 429（实测 3/3 全挂）
+      - 每分钟/并发限流 → 通常只打掉其中一两个模型，且很快恢复
+      所以「同时挂的模型数量」比「报错里写了什么词」更能区分根因。
+
+    判据（任一成立即认为是额度耗尽）：
+      1) 报错里点名「Token Plan 用量上限」
+      2) **全部**候选模型同时失败（All models failed 且 N≥2）且带限流/额度语义
+         —— 这一条**不依赖具体措辞**：「全部模型同时挂」本身就是账号级信号
+      3) 报错点名了限流/配额语义（rate limit / quota / 429 / 用量上限），
+         且**没有**说明只挂了单个模型
+
+    ⚠️ 第 2 条刻意**不要求**出现 "rate limit" 字样：
+      措辞一变（今天 "rate limit"、明天 "quota exhausted"）就漏判，
+      正是本次要修的病。特征（同时挂几个模型）比字面量稳定。
+    """
+    if not err:
+        return False
+    if "Token Plan" in err:
+        return True
+    low = err.lower()
+    # 「All models failed (N)」里的 N = 同时失败的候选模型数
+    m = re.search(r"All models failed \((\d+)\)", err)
+    n_failed = int(m.group(1)) if m else 0
+    # 限流/配额语义（措辞无关的一组同义词）
+    has_quota_semantics = any(
+        k in low for k in ("rate limit", "rate_limit", "quota", "429", "用量上限", "限额")
+    )
+    if n_failed >= 2 and has_quota_semantics:
+        return True
+    if n_failed >= 3:
+        # 全部候选模型一起挂，且没有别的语义 —— 仍然是账号级信号
+        return True
+    if has_quota_semantics and "all models failed" not in low:
+        # 单模型失败但明说限流：可能是每分钟抖动，**不算**额度耗尽
+        return False
+    return False
+
+
 def _load_history(env, job_id, limit=20):
     """拉取某个 job 的历史运行记录（用于检查历史投递失败）。
 
@@ -190,8 +238,19 @@ def main() -> int:
                     hist = _load_history(env, job_id, limit=1)
                     if hist:
                         err = str(hist[0].get("error") or "")
+                        # 额度耗尽的**措辞会变**，认字面量就会漏判。
+                        # 2026-11-09 实测：11-02 的报错是「Token Plan 用量上限」，
+                        # 11-08 已变成「⚠️ API rate limit reached (rate_limit)」——
+                        # 措辞一变，healthcheck 的 WAITING_PATTERNS("Token Plan")
+                        # 就再也匹配不上 → 额度问题被误报成「可处理 - 现在就该修」。
+                        #
+                        # 真正的判据不是字面量，而是**特征**：
+                        # 全部候选模型同时报 rate limit = 账号级额度耗尽（计费周期），
+                        # 而每分钟限流只会打掉其中一两个模型、且很快就恢复。
                         if "Token Plan" in err:
                             reason = "，原因：Token Plan 用量上限(需充值)"
+                        elif _is_quota_exhausted(err):
+                            reason = "，原因：额度耗尽(API rate limit，需充值)"
                         elif "rate limit" in err.lower():
                             reason = "，原因：接口限流"
                         elif "timed out" in err:

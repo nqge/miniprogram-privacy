@@ -45,6 +45,11 @@ WAITING_ON_USER = [
     "明文凭证 ",                    # 【E】需牛哥哥本人吊销 PAT 重签
     "未配置任何 fallback",          # 【M】同上
     "fallback 全在",                # 【M】同上
+    # 2026-11-09 新增：MiniMax 额度耗尽 → 需牛哥哥充值/升级。
+    # 报错措辞会变（11-02「Token Plan 用量上限」→ 11-08「API rate limit reached」），
+    # 只认旧措辞会漏判 → 长期项被误报成「可处理」，反而变成每天刷屏的假警报。
+    "额度耗尽",
+    "Token Plan",
 ]
 
 
@@ -189,6 +194,41 @@ def check_memory_index():
         bad(f"记忆库读取失败（{type(e).__name__}）")
 
 
+def _cron_failure_reason(j) -> str:
+    """取出 cron 最近一次失败的**原因**，让分类器能区分根因。
+
+    2026-11-09：判据复用 check_cron_delivery.py 的真身（不抄一份）——
+    抄版判据会和真版悄悄漂移（E11 的教训）。
+
+    读不到就返回空串（不是失败：只是「判断不了」）。
+    """
+    job_id = j.get("id") or j.get("jobId")
+    if not job_id:
+        return ""
+    try:
+        sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+        from check_cron_delivery import _is_quota_exhausted, _load_history
+        env = dict(os.environ)
+        env.setdefault("OPENCLAW_LOG_LEVEL", "warn")
+        hist = _load_history(env, job_id, limit=1)
+        if not hist:
+            return ""
+        err = str(hist[0].get("error") or "")
+        if not err:
+            return ""
+        if "Token Plan" in err:
+            return "，原因：Token Plan 用量上限(需充值)"
+        if _is_quota_exhausted(err):
+            return "，原因：额度耗尽(API rate limit，需充值)"
+        if "rate limit" in err.lower():
+            return "，原因：接口限流"
+        if "timed out" in err.lower():
+            return "，原因：执行超时"
+        return f"，原因：{err[:60]}"
+    except Exception:
+        return ""
+
+
 def check_cron_delivery():
     print("【定时任务投递】")
     out, _ = cmd([OPENCLAW, "cron", "list", "--json"], timeout=60)
@@ -212,7 +252,10 @@ def check_cron_delivery():
             continue  # 从未跑过的新任务
         checked += 1
         if rs != "ok":
-            bad(f"{name} 运行失败（lastRunStatus={rs}）")
+            # 2026-11-09：把**失败原因**带进文本，否则「额度耗尽」和「脚本坏了」
+            # 长得一模一样 —— 后者我能修，前者只能等牛哥哥充值（E59 的老教训）。
+            reason = _cron_failure_reason(j)
+            bad(f"{name} 运行失败（lastRunStatus={rs}{reason}）")
         elif dl.get("mode") == "announce" and not st.get("lastDelivered"):
             bad(f"{name} 投递未送达（delivery={st.get('lastDeliveryStatus')}）")
     if checked:
