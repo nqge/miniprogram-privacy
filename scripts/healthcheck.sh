@@ -130,9 +130,29 @@ else
 fi
 
 # A3 embeddings 代理
+# ⚠️ 2026-11-10 加（E69）：/health 返回的是**写死的** {ok:true}，不碰上游
+#   → 它只能证明「进程在」，不能证明「记忆检索能用」。
+#   → 拆成两层：① 存活（进程+端点）② 功能（真发一次 embedding 请求，看上游返回码）。
 px_out=$(curl -s -m 8 "$PROXY_HEALTH" 2>/dev/null)
-if echo "$px_out" | grep -q '"ok":true'; then ok "嵌入代理健康（记忆检索依赖）"
-else bad "嵌入代理不可用 - 记忆检索会失效 - ${px_out}"; fi
+if echo "$px_out" | grep -q '"ok":true'; then
+  ok "嵌入代理存活（进程健康，记忆检索依赖）"
+  # ② 功能探针：真打一次上游。返回 200 = 上游通；4xx/5xx = 上游有问题。
+  px_api=$(curl -s -m 15 -o /tmp/hc_embed_probe.json -w '%{http_code}' \
+    -X POST "http://127.0.0.1:8799/v1/embeddings" \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"embo-01","input":["ping"]}' 2>/dev/null)
+  px_body=$(cat /tmp/hc_embed_probe.json 2>/dev/null | head -c 400)
+  if [ "$px_api" = "200" ]; then
+    ok "嵌入代理功能正常（真打上游返回 200）"
+  elif echo "$px_body" | grep -qiE "insufficient|1008|rate.?limit|余额|额度"; then
+    # 额度耗尽 —— 只能靠牛哥哥充值/升级，不是「我现在就能修」
+    bad "嵌入上游额度耗尽（HTTP ${px_api}）- 记忆检索会失效 - ${px_body}"
+  else
+    bad "嵌入上游异常（HTTP ${px_api}）- 记忆检索会失效 - ${px_body}"
+  fi
+else
+  bad "嵌入代理不可用 - 记忆检索会失效 - ${px_out}"
+fi
 
 # ── B. 服务状态 ───────────────────────────────────
 echo ""
