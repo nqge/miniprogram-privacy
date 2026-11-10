@@ -306,6 +306,17 @@ def check_provider_health():
         ["/usr/bin/python3", f"{WS}/scripts/check_provider_health.py"],
         capture_output=True, text=True, timeout=90,
     )
+    # ⚠️ 2026-11-10 加（E69 同类）：子脚本里 429 的**额度信号**在另一行（WARN），
+    #   而真正被分类的是「没有任何可用 provider」这条 FAIL —— 它不含任何额度字样
+    #   → 额度耗尽被误报成「整个系统无法推理」的可处理故障，天天刷假警报。
+    #   修法：把子脚本输出里的额度特征**提取出来，带进 FAIL 消息**。
+    quota_hint = ""
+    quota_markers = ("Token Plan", "额度", "余额", "insufficient balance", "rate_limit_error")
+    for ln in (r.stdout or "").split("\n"):
+        if any(mk in ln for mk in quota_markers):
+            quota_hint = "额度耗尽"
+            break
+
     for ln in (r.stdout or "").split("\n"):
         ln = ln.strip()
         if not ln or ln.startswith("【Provider 凭证】"):
@@ -317,7 +328,10 @@ def check_provider_health():
         else:
             print(f"  {ln}")
     if r.returncode != 0:
-        bad("provider 检查未通过（详见上方）")
+        if quota_hint:
+            bad(f"provider 检查未通过 —— {quota_hint}（需充值/升级 Token Plan）")
+        else:
+            bad("provider 检查未通过（详见上方）")
 
 
 def _check_unit_integrity():

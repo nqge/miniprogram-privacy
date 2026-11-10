@@ -117,7 +117,14 @@ def main():
 
     # 最关键的判断：还有能用的吗？
     if not alive:
-        print("  ❌ FAIL  **没有任何可用 provider** —— 整个系统无法推理")
+        # ⚠️ 2026-11-10：区分「真的全死了」和「只是额度耗尽」。
+        #   额度耗尽时（HTTP 429 + Token Plan 上限）系统**暂时**不能推理，
+        #   但根因是牛哥哥要充值，不是配置坏了 —— 措辞必须带上，否则下游
+        #   会把它当成「可处理 - 现在就该修」的假警报（E66/E69 同源问题）。
+        if warned and any("Token Plan" in w or "限流" in w for w in warned):
+            print("  ❌ FAIL  **没有任何可用 provider** —— 整个系统暂时无法推理（额度耗尽，需充值）")
+        else:
+            print("  ❌ FAIL  **没有任何可用 provider** —— 整个系统无法推理")
         print("           （今天上午三个 provider 全失效时，状态字段依然显示正常）")
         return 1
     if dead:

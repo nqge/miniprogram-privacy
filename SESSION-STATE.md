@@ -1,10 +1,23 @@
 # SESSION-STATE.md
 
-> **最后更新**: 2026-11-10 10:45
+> **最后更新**: 2026-11-10 15:55
 > **状态**: ✅ **11-10 10:35 心跳（查清 07:00 两个 FAIL 的真因 + 修掉一个真 bug + 补 E69）**：07:00 巡检报 `Embeddings: unavailable` + `记忆检索执行异常` 两个 FAIL，**独立复核后确认是 MiniMax 额度瞬时耗尽，不是功能坏了** —— embed-proxy journal 里 `insufficient balance` **只出现在 07:00:37~07:01:52**（正是巡检自己探测的那几分钟），此后 10:35 连续 3 次真实检索全部成功、分数一致。**但复核过程中挖出一个真 bug**：代理的 `/health` 返回的是**写死的** `{ok:true}`（`minimax_embed_proxy.mjs:78`），**压根不碰上游** → 【A3】「嵌入代理健康」只是**进程存活检查**，不是功能检查 → 上游报 `insufficient balance` 时它照样 PASS，**故障被伪装成了健康**。**已修**：【A3】拆成两层（存活 + **真打上游的功能探针**），并按报错特征区分「额度耗尽」(归**等你**，需牛哥哥充值) vs 「上游异常」(可处理)。**已做故障注入验证**：用假上游起测试代理实例 → `/health` 仍返回 `ok:true`，功能探针返回 **HTTP 502 insufficient balance** → 断言能分辨 ✅（测试实例已清理，生产代理全程未受影响）。
 > **本轮产出**：① 补写 `memory/2026-11-10.md`（**184 汉字**）+ `memory/daily-notes-index.md`（**198 汉字**），两处 `--check` 双 PASS —— 09:00 daily-learning 因额度耗尽失败且**未补跑**，当天笔记是缺的；② **新提升 L1 E69**（第 69 条）：「**健康端点返回的是硬编码的 ok —— 探针没坏，被探的对象在撒谎**」→ E63 的反面变种（E63 是探针坏了，本条是探针完全正常但目标在自我认证，E63 的自检照常通过）；`verify_l1_retrieval.py` **69/69 PASS**，E69 检索**排名第 1**（主库 0.8079）/ 第 2（独立文件 0.7783）；③ 全量巡检复跑 **PASS=75 FAIL=0 等你=3**（两个 FAIL 消失）；④ **09:00 daily-learning 仍无补跑**（明早 09:00 计划槽位会自愈）。
 > **今日巡检**：全量 **PASS=75 FAIL=0 WARN=5 等你=3**（30 组）· 03:00 backup-audit **PASS=19 FAIL=0** · 记忆索引 **97/97 文件 · 698 块 · Dirty=no** · Embeddings ready · 记忆检索端到端可用（命中 MEMORY.md:1）· 茶馆 08:15 拉 96 条 issue **新增 0**（无新内容，不硬凑笔记）· 4 个 systemd timer 按期。
 > **仍需牛哥哥决策的长期项（未变）**：MiniMax Token Plan 额度周期性耗尽（充值/升级 或 加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理（等牛哥哥点头）。
+
+<details><summary>11-10 15:44 心跳追加（quick-health 假警报归类修复 · E69 同源）</summary>
+
+> **发现**：`logs/quick-health.log` 从 06:12 起**每 30 分钟**报「**没有任何可用 provider** —— 整个系统无法推理」FAIL，但**系统当时明明能推理**（心跳会话本身就跑在上面）。查 journal 拿到 14:58 的真实报错：
+> `⚠️ WARN minimax 限流（HTTP 429）{"type":"rate_limit_error","message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"}`
+> → **和今天所有故障同一个根因**（MiniMax Token Plan 额度），但**分类错了**：额度信号在**WARN 那行**，被分类的却是「没有任何可用 provider」+「provider 检查未通过」这两条 FAIL —— **它们不含任何额度字样** → 额度耗尽被当成「可处理 - 现在就该修」，**天天刷假警报**。
+> **这是 E69 的同源问题**：信号存在，但**不在分类器读的那条路径上**（E69 是探针端点撒谎，这条是信号在隔壁行）。
+> **已修**：① `check_provider_health.py` 的「没有任何可用 provider」区分**额度耗尽** vs **真全挂**；② `quick_health.py` 提取子脚本输出里的额度特征（`quota_hint`，覆盖 Token Plan/额度/余额/rate_limit_error/insufficient balance）**带进 FAIL 消息** → 命中 WAITING_ON_USER。
+> **已验证**：故障注入 → 额度场景两条 FAIL 均归「等你」✅；**真故障仍算「可处理」**（E59：不能为降假警报把真故障藏起来）✅；实跑 quick-health **可处理 0 / 等用户 3** ✅。
+> **新增单测**：`test_quota_classification.py` 加【6】组 **9 个用例**（17→25，全 PASS）—— 防「信号不在分类路径上」复发。
+> **回归全绿**：解析器 ✅ · 额度分类 25/25 ✅ · 【V】13 ✅ · 【W3】12/12 ✅ · 【W2】30/30 ✅ · 【W4】14 ✅。
+
+</details>
 
 <details><summary>11-09 15:32 心跳原始记录（E68 补齐 + 【A2】加固）</summary>
 

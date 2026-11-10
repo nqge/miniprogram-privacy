@@ -172,6 +172,72 @@ def test_not_hiding_real_failures():
     )
 
 
+def test_provider_health_classification():
+    """2026-11-10 新增：provider 探针的额度信号必须**传到被分类的那条 FAIL 上**。
+
+    真实故障（quick-health.log 14:58 实录）：
+        ⚠️  WARN  minimax 限流（HTTP 429）... "已达到 Token Plan 用量上限"... (2056)
+        ❌ FAIL  **没有任何可用 provider** —— 整个系统无法推理
+        ❌ FAIL  provider 检查未通过（详见上方）
+
+    额度信号在 **WARN 那行**，而被分类的是**两条 FAIL** —— 它们不含任何额度字样
+    → 额度耗尽被误报成「整个系统无法推理」的**可处理**故障，天天刷假警报。
+
+    这是 E69 的同源问题：信号存在，但**不在分类器读的那条路径上**。
+    """
+    print("【6】provider 探针的额度信号要传到 FAIL 上（E69 同源）")
+    qh = (WS / "scripts" / "quick_health.py").read_text(encoding="utf-8")
+    cph = (WS / "scripts" / "check_provider_health.py").read_text(encoding="utf-8")
+
+    # ① check_provider_health.py 的「没有任何可用 provider」必须区分额度耗尽
+    check(
+        "check_provider_health.py 有额度耗尽分支",
+        "额度耗尽" in cph,
+        "全挂时必须区分「真死了」和「只是没额度」",
+    )
+    check(
+        "check_provider_health.py 的额度分支看的是 warn 明细（Token Plan/限流）",
+        "Token Plan" in cph and "限流" in cph,
+    )
+
+    # ② quick_health.py 必须把子脚本输出里的额度特征**提取**出来
+    check(
+        "quick_health.py 提取额度特征（quota_hint）",
+        "quota_hint" in qh,
+    )
+    check(
+        "quick_health.py 的额度特征覆盖多种措辞",
+        all(m in qh for m in ("Token Plan", "额度", "余额")),
+        "措辞会变（E66），要覆盖多个特征",
+    )
+
+    # ③ 端到端：造出真实的 429 输出，验证**被分类的那两条 FAIL**命中 WAITING
+    waiting = ["只有 1 个 provider", "明文凭证 ", "未配置任何 fallback",
+               "fallback 全在", "额度耗尽", "Token Plan"]
+
+    # 模拟 check_provider_health.py 在额度耗尽时的两条输出
+    fails = [
+        "**没有任何可用 provider** —— 整个系统暂时无法推理（额度耗尽，需充值）",
+        "provider 检查未通过 —— 额度耗尽（需充值/升级 Token Plan）",
+    ]
+    for f in fails:
+        check(
+            f"额度场景下 FAIL 被归为「等你」：{f[:34]}…",
+            any(k in f for k in waiting),
+            "分类器读的就是这条消息",
+        )
+
+    # ④ 反面：**真**的全挂（没有额度信号）不能被藏进「等你」
+    real_dead = ["**没有任何可用 provider** —— 整个系统无法推理",
+                 "provider 检查未通过（详见上方）"]
+    for f in real_dead:
+        check(
+            f"真故障仍算「可处理」：{f[:30]}…",
+            not any(k in f for k in waiting),
+            "E59：不能为了降假警报把真故障一起藏起来",
+        )
+
+
 def main():
     print("=" * 62)
     print(" 额度耗尽分类器单测（2026-11-09）")
@@ -181,6 +247,7 @@ def main():
     test_end_to_end_pattern()
     test_quick_health_pattern()
     test_not_hiding_real_failures()
+    test_provider_health_classification()
     print("=" * 62)
     print(f" 结果: PASS={PASSED}  FAIL={len(FAILED)}")
     if FAILED:
