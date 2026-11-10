@@ -100,6 +100,8 @@ def main():
         return 1
 
     alive, dead, warned, skipped = [], [], [], []
+    quota_markers = ("Token Plan", "用量上限", "insufficient balance", "余额", "额度")
+    quota_hit = False  # 是否撞上「额度耗尽」特征（只看**报错明细**，不看 provider 名）
     for name, p in providers.items():
         status, detail = probe(name, p)
         if status == "ok":
@@ -108,12 +110,16 @@ def main():
         elif status == "warn":
             print(f"  ⚠️  WARN  {name} {detail}")
             warned.append(name)
+            if any(mk in detail for mk in quota_markers):
+                quota_hit = True
         elif status == "skip":
             print(f"  ⏭  SKIP  {name} {detail}")
             skipped.append(name)
         else:
             print(f"  ❌ FAIL  {name} {detail}")
             dead.append(name)
+            if any(mk in detail for mk in quota_markers):
+                quota_hit = True
 
     # 最关键的判断：还有能用的吗？
     if not alive:
@@ -121,7 +127,11 @@ def main():
         #   额度耗尽时（HTTP 429 + Token Plan 上限）系统**暂时**不能推理，
         #   但根因是牛哥哥要充值，不是配置坏了 —— 措辞必须带上，否则下游
         #   会把它当成「可处理 - 现在就该修」的假警报（E66/E69 同源问题）。
-        if warned and any("Token Plan" in w or "限流" in w for w in warned):
+        #
+        # ⚠️ 同日修正：条件必须看**报错明细**，不能看 provider 名字 ——
+        #   `warned` 里存的是 name（"minimax"），永远不含 "Token Plan"
+        #   → 分支永远不触发（19:06 实测漏判一条）。
+        if quota_hit:
             print("  ❌ FAIL  **没有任何可用 provider** —— 整个系统暂时无法推理（额度耗尽，需充值）")
         else:
             print("  ❌ FAIL  **没有任何可用 provider** —— 整个系统无法推理")

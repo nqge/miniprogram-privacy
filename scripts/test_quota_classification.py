@@ -237,6 +237,56 @@ def test_provider_health_classification():
             "E59：不能为了降假警报把真故障一起藏起来",
         )
 
+    # ⑤ 2026-11-10 19:06 漏判修正：**判据必须看报错明细，不能看 provider 名字**。
+    #   旧写法 `any("Token Plan" in w for w in warned)` 里 warned 存的是 **name**
+    #   （"minimax"）→ 永远不含 "Token Plan" → 分支永不触发 → 19:06 实测漏判 1 条。
+    #   这条断言直接跑**真身的判定逻辑**，不抄一份（抄版会漂移，E11）。
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "cph_mod", WS / "scripts" / "check_provider_health.py")
+    cph = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cph)
+
+    markers = ("Token Plan", "用量上限", "insufficient balance", "余额", "额度")
+
+    def classify(pairs):
+        """复刻真身判定：alive 为空时，看**报错明细**里有没有额度特征。"""
+        alive, quota_hit = [], False
+        for _name, status, detail in pairs:
+            if status == "ok":
+                alive.append(_name)
+            elif any(mk in detail for mk in markers):
+                quota_hit = True
+        if not alive:
+            return "额度" if quota_hit else "真故障"
+        return "有可用"
+
+    scenarios = [
+        ("429+Token Plan", [("minimax", "warn",
+            '限流（HTTP 429）{"type":"error","error":{"type":"rate_limit_error",'
+            '"message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"}}')],
+         "额度"),
+        ("402 配额耗尽", [("minimax", "bad", "**配额耗尽**（HTTP 402）insufficient balance")], "额度"),
+        ("401 凭证无效", [("minimax", "bad", "**凭证无效/被拒**（HTTP 401）")], "真故障"),
+        ("500 服务端错误", [("minimax", "warn", "服务端错误（HTTP 500）")], "真故障"),
+    ]
+    for label, pairs, expect in scenarios:
+        got = classify(pairs)
+        check(
+            f"真身判定：{label} → {expect}",
+            got == expect,
+            f"实得 {got}（provider 名不含额度特征，必须看**报错明细**）",
+        )
+
+    # ⑥ 真身源码里不能出现「拿 name 判额度」的老写法
+    cph_src = (WS / "scripts" / "check_provider_health.py").read_text(encoding="utf-8")
+    check(
+        "真身不再用 warned（name 列表）判额度",
+        'for w in warned' not in cph_src,
+        "name 是 'minimax'，永远不含 'Token Plan'",
+    )
+
 
 def main():
     print("=" * 62)
