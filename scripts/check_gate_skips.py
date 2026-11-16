@@ -292,7 +292,7 @@ def judge(logs):
                 problems.append(
                     f"{name} 最近曾连续 {best_streak} 次被闸门跳过"
                     f"（截至 {detail[name]['best_streak_end_ts']}，现已恢复）"
-                    f" -- {why}（E74）")
+                    f" -- {why}")
             else:
                 problems.append(
                     f"{name} 最近连续 {consecutive} 次被闸门跳过"
