@@ -55,7 +55,24 @@ def load_key():
     return d["models"]["providers"]["minimax"]["apiKey"]
 
 
-def probe(tokens: int = 15000):
+QUOTA_MARKERS = ("Token Plan", "用量上限", "insufficient balance", "余额", "额度", "配额",
+                 "usage limit", "quota exceeded")
+
+
+def _is_quota_signal(raw: str) -> bool:
+    """判断 429 报文里到底是「额度耗尽」还是「普通限流」。
+
+    ⚠️ 为什么必须分开（2026-11-16 实测）：
+    MiniMax 的 429 有两种完全不同的含义 ——
+      ① 「已达到 Token Plan 用量上限」→ 额度耗尽，**重试也没用**，等充值
+      ② 「rate limit reached, please try again later」→ 普通限流，**等一会就好**
+    两者 HTTP 码一样（429），但对「现在该不该跑」给出**相反**的答案。
+    把 ② 当成 ① → 白等；把 ① 当成 ② → 白烧额度。
+    """
+    return any(m in raw for m in QUOTA_MARKERS)
+
+
+def probe_once(tokens: int = 15000):
     """用接近真实负载的请求探额度。
 
     ⚠️ 关键：**不能用 1-token 小请求当额度信号**。
@@ -90,10 +107,48 @@ def probe(tokens: int = 15000):
         raw = e.read().decode("utf-8", "replace")
         dt = time.time() - t0
         if e.code == 429:
-            return False, f"额度不足：HTTP 429 {raw[:120]}", dt
+            # ⚠️ 429 还要看报文：只有带「额度」特征的才是额度耗尽，
+            #    纯限流（rate_limit_error，无 Token Plan 字样）也是 429。
+            if _is_quota_signal(raw):
+                return False, f"额度不足：HTTP 429 {raw[:120]}", dt
+            return False, f"探测失败：HTTP 429（普通限流，非额度耗尽）{raw[:120]}", dt
+        if e.code == 529:
+            # ⚠️ 529 = 上游整点高峰过载（overloaded_error），**不是额度问题**
+            #    上游自己说「通常 1-5 分钟内恢复」→ 重试，别当额度耗尽。
+            return False, f"上游繁忙：HTTP 529（overloaded，瞬时可恢复，非额度问题）{raw[:120]}", dt
+        if e.code == 402:
+            return False, f"额度不足：HTTP 402 {raw[:120]}", dt
         return False, f"探测失败：HTTP {e.code} {raw[:120]}", dt
     except Exception as e:
         return False, f"探测失败：{type(e).__name__} {e}", 0.0
+
+
+def probe(tokens: int = 15000, retries: int = 3, backoff: int = 25):
+    """探测额度 —— 对**瞬时**失败（529 过载）自动重试。
+
+    ⚠️ 2026-11-16 加：整点高峰上游会返回 HTTP 529（overloaded_error，
+    上游自己说「通常 1-5 分钟内恢复」）。**529 不是额度问题** ——
+    原实现把它和其他错误一起判成「额度不足，先别跑」，结论一样但**理由错了**，
+    而更糟的是：整点（09:00）恰恰是 daily-learning 的计划槽位 ——
+    **最需要额度的时候，最可能撞上最容易被误判的错误**。
+
+    重试策略：
+      · 529（过载）→ 退避后重试，最多 retries 次
+      · 429/402（额度）→ **不重试**（重试也不会有额度，等充值）
+      · 其他错误 → 不重试
+    """
+    last = (False, "未探测", 0.0)
+    for attempt in range(1, retries + 1):
+        ok, msg, dt = probe_once(tokens)
+        last = (ok, msg, dt)
+        transient = "上游繁忙：HTTP 529" in msg
+        if ok or not transient or attempt == retries:
+            break
+        wait = backoff * attempt
+        print(f"  ⚠️  {msg[:80]}")
+        print(f"  ↻ 上游瞬时过载，{wait}s 后重试（第 {attempt}/{retries} 次）…")
+        time.sleep(wait)
+    return last
 
 
 def next_slots(minutes_ahead: int = 120):
@@ -132,6 +187,8 @@ def main():
     ap.add_argument("--job", help="要补跑的 cron id（可选）")
     ap.add_argument("--probe-tokens", type=int, default=15000,
                     help="探测用的近似 token 量（默认 15000）")
+    ap.add_argument("--no-retry", action="store_true",
+                    help="不重试 529 过载（调试用）")
     args = ap.parse_args()
 
     print("=" * 60)
@@ -153,7 +210,7 @@ def main():
 
     # ② 额度探测
     print(f"\n【额度探测】（~{args.probe_tokens} token 真实负载，不用小请求）")
-    ok, msg, dt = probe(args.probe_tokens)
+    ok, msg, dt = probe(args.probe_tokens, retries=1 if args.no_retry else 3)
     print(f"  {'✅' if ok else '❌'} {msg}")
 
     # ③ 结论
@@ -163,8 +220,19 @@ def main():
 
     if not ok:
         blocked = True
-        print(" ❌ 结论：**先别跑** —— 额度不够，跑也是白烧（还会白占几分钟）")
-        print("    建议：等额度恢复，或改用更省的任务 / 手动写笔记")
+        # ⚠️ 三种失败模式给三种建议（2026-11-16 加）
+        if "上游繁忙：HTTP 529" in msg:
+            print(" ❌ 结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通")
+            print("    建议：等 1-5 分钟上游恢复再跑；这不是充值能解决的问题")
+        elif "额度不足" in msg:
+            print(" ❌ 结论：**先别跑** —— 额度不够，跑也是白烧（还会白占几分钟）")
+            print("    建议：等额度恢复，或改用更省的任务 / 手动写笔记")
+        elif "普通限流" in msg:
+            print(" ❌ 结论：**先别跑** —— 上游普通限流（非额度耗尽），等一会儿再试")
+            print("    建议：等 1-2 分钟重试；额度是好的，不用充值")
+        else:
+            print(" ❌ 结论：**先别跑** —— 额度不够，跑也是白烧（还会白占几分钟）")
+            print("    建议：等额度恢复，或改用更省的任务 / 手动写笔记")
     elif imminent:
         blocked = True
         names = ", ".join(f"{s['name']}({s['in_min']:.0f}分钟后)" for s in imminent)

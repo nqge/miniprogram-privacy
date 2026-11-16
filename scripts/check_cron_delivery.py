@@ -130,6 +130,40 @@ def _max_consecutive_errors(runs):
     return best
 
 
+def _outage_span_days(runs):
+    """连续失败已经持续了几天（按日历天算）。
+
+    ⚠️ 为什么不用「次数」当严重性指标（E71）：
+    一个每天跑 1 次的任务，连续 6 次 = 中断 6 天；
+    但一个每小时跑 24 次的任务，连续 6 次 = 只中断了 15 分钟 ——
+    **同样的次数，运维含义差了两个数量级**。
+    → 所以断言的是**日历跨度**，不是次数。
+
+    判据：从最近一次成功之后，到最近一次运行，中间隔了几天。
+    """
+    if not runs:
+        return 0
+    last_ok = None
+    last_run = None
+    for r in runs:
+        ms = r.get("runAtMs")
+        if not isinstance(ms, (int, float)):
+            continue
+        if last_run is None:
+            last_run = ms
+        if r.get("status") == "ok":
+            last_ok = ms
+            break
+    if last_ok is None or last_run is None:
+        # 全都是失败 → 用「最早一次失败到现在」当跨度
+        times = [r.get("runAtMs") for r in runs
+                 if isinstance(r.get("runAtMs"), (int, float))]
+        if not times:
+            return 0
+        return max(1, round((max(times) - min(times)) / 86400000) + 1)
+    return max(1, round((last_run - last_ok) / 86400000))
+
+
 def _is_quota_exhausted(err: str) -> bool:
     """判断这个 rate limit 是不是**账号级额度耗尽**（需要牛哥哥充值）。
 
@@ -221,6 +255,9 @@ def main() -> int:
         st = j.get("state", {}) or {}
         mode = dl.get("mode")
         run_status = st.get("lastRunStatus")
+        # reason 在下面按需填充；先初始化，避免「历史上失败过但最近一次好了」
+        # 的任务走到 E71 分支时 NameError（E11：不抄判据，用真身，且不许崩）。
+        reason = ""
 
         # 从未运行过的新任务不算失败（没有历史 ≠ 出故障）
         if run_status is None and not st.get("lastRunAtMs"):
@@ -259,8 +296,27 @@ def main() -> int:
                             reason = f"，原因：{err[:60]}"
                 except Exception:
                     pass
-            print(f"FAIL {name} 运行失败（lastRunStatus={run_status}{reason}）")
-            failed += 1
+            # ── E71：连续失败 ≥3 次 → 只报**持续中断**那一条，不重复报「单次失败」──
+            #
+            # 为什么合并成一条：两条 FAIL 说的是**同一个任务**的**同一个事实**
+            #   （a）"daily-learning 运行失败"        ← 单次视角
+            #   （b）"daily-learning 连续失败 6 次，已中断 6 天" ← 持续视角
+            # (b) 完全**包含** (a) 的信息（还多带了中断时长）→
+            # 两条都报 = 同一个任务在报告里出现两次 = 噪音（E66）。
+            # → 所以 consec ≥3 时**只报 (b)**，并把它计入 failed。
+            consec_now = _max_consecutive_errors(_load_history(env, job_id, limit=20)) \
+                if job_id else 0
+            if consec_now >= 3:
+                span_now = _outage_span_days(_load_history(env, job_id, limit=20))
+                print(
+                    f"FAIL {name} 连续失败 {consec_now} 次，任务已中断约 {span_now} 天！"
+                    f"（lastRunStatus={run_status}{reason}）"
+                )
+                failed += 1
+                sustained_reported = True
+            else:
+                print(f"FAIL {name} 运行失败（lastRunStatus={run_status}{reason}）")
+                failed += 1
         elif mode == "announce":
             job_id = j.get("id") or j.get("jobId")
             # E55：先问「本该发什么」—— 无产出则不投递是正确的
@@ -310,6 +366,25 @@ def main() -> int:
             #   巡检自己的判据有盲区，于是故障静悄悄通过。
             #
             # 修法：error 统计与 undelivered 统计【正交】，两边都要报。
+            # ── 2026-11-16 加（E71）：连续失败 ≥3 次 → 必须升级，不能停在 WARN ──
+            #
+            # 背景（实测）：daily-learning 从 11-10 起**连续 6 天**每天 09:00 失败，
+            # 11-12 ~ 11-16 的 memory/YYYY-MM-DD.md **全部不存在**。
+            # 而巡检每天早上都把这个事实算出来、写进报告 —— 然后归档。
+            #
+            # 问题不在于「测得不准」，而在于**分类把它降级了**：
+            #   「连续 6 次失败」被放进 WARN 区 → 不进「现在就该修」→ **没人动**
+            #   → 失败照旧再叠一天 → 明天再报一次同样的 WARN
+            # → 一个已经死了 6 天的任务，在报告里看起来和一次偶发失败一样重。
+            #
+            # 修法（不是把 WARN 改标签就完事）：
+            #   ① 连续失败 ≥3 次 → **额外**产出一条 FAIL，断言的是
+            #      「**持续中断时长**」而不是「这一次失败了」—— 两件事，不重复。
+            #   ② 额度类原因 → FAIL 文本里带上「额度耗尽」字样
+            #      → healthcheck 的 is_waiting() 把它归进「⏳ 等你」
+            #      → **不会**变成「可处理 - 现在就该修」的假警报（额度我改不了）
+            #   ③ 同时**抑制**原来那条 WARN —— 同一个事实报两遍就是噪音，
+            #      而 E66 已经教会我们：假警报会淹没真信号。
             if error_runs:
                 err_ts = []
                 for r in error_runs[:5]:
@@ -320,7 +395,25 @@ def main() -> int:
                     )
                 # 连续失败比零散失败严重得多：连续 N 天挂 = 静默中断 N 天
                 consec = _max_consecutive_errors(runs)
-                if consec >= 2:
+                # 持续中断了几天（按日历天算，不是次数）
+                span_days = _outage_span_days(runs)
+                # ⚠️ E71：上面（run_status != "ok" 分支）如果已经报了
+                #    「连续失败 N 次，已中断 N 天」这条 FAIL，
+                #    这里**不要**再报一遍同样的事实 —— 同一个任务出现两次
+                #    就是噪音（E66），而噪音会淹没真信号。
+                #
+                # 分两种情况：
+                #   · 任务**现在还在挂** → 上面已经报了 FAIL，这里不重复
+                #   · 任务**已经恢复**（最近一次 ok）→ 历史遗留，不该记 FAIL，
+                #     但「曾经连续挂过 N 天」这个事实值得留痕 → WARN
+                if consec >= 3:
+                    if run_status == "ok":
+                        print(
+                            f"WARN {name} 历史上曾连续失败 {consec} 次"
+                            f"（约 {span_days} 天，现已恢复）"
+                        )
+                    # 现在还挂着 → 上面已报 FAIL，这里不重复
+                elif consec >= 2:
                     print(
                         f"WARN {name} 最近 {len(runs)} 次里有 {len(error_runs)} 次 error"
                         f"，其中最多【连续 {consec} 次】失败（最近一次正常）："
