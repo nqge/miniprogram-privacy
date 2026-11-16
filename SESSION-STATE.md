@@ -1,13 +1,26 @@
 # SESSION-STATE.md
 
-> **最后更新**: 2026-11-16 15:00（14:35 / 14:50 / 15:00 三轮补记见下）
-> **状态**: ✅ **11-16 14:20 心跳（把「额度闸门」架构做完整 + 抓到一个我自己引入的「断言装死」）**：本轮把上一轮的闸门做完整，并**发现上一轮的做法埋了一个新的静默失效**。
-> **① 闸门扩展到 daily-reflection** —— 实测它的失败形态与 daily-learning **完全相同**（`All models failed (3)` + 148~312s 空转 + 零产出）。`scripts/daily_learning_gate.py` **泛化**为 `--job` 多任务共用（**不复制第二份**，E11）；新增 `openclaw-daily-reflection.timer`（周日 07:00, Persistent）；它的 cron 调度也禁用。漂移检查 50 → **57 项**。顺带查到一件事实：**daily-reflection 从未在计划槽位上成功过**（4 次成功全是手动补跑）。
-> **② 抓到我自己引入的「断言装死」回归** ⚠️ —— 两个任务都禁用后，`openclaw cron list` 返回 **「No cron jobs」**；而 `check_cron_delivery.py` 原来是从 `cron list` 取列表的 → `for j in jobs:` 循环体**一次都不跑** → `__FAILED__=0` → **【D】组一条断言都没检查，却显示「全部通过」**。**这是我上一轮改架构时顺手带出来的**，而且它恰好落在「报告说没问题、检查对象却不在视野里」这个家族上（E69 探针撒谎 / E71 分类降级 / 【X】解析器装死 / E73 终点取错）。修法：① 改读 `cron/jobs.json`（同一份数据源，不按 enabled 过滤）；② 加**显式失败分支** —— 一个任务都没读到就报「本次**什么都没检查**（断言装死）」并 exit 1；③ 新增单测 `scripts/test_cron_delivery_no_jobs.py`（7 用例，**含真实故障注入**：把存储改名 + 伪造 `cron list` 返回空 → 断言必须返回非 0）。
-> **③ 巡检 PASS=78 FAIL=0 WARN=4 等你=2** · 漂移 57/57 ✅ · 回归全绿（解析器 ✅ ·【V】13 ✅ ·【W2】30 ✅ ·【W3】12 ✅ ·【W4】14 ✅ · 额度分类 30 ✅ · 预检 18 ✅ · E71 17 ✅ ·【U】自检 ✅ · 断言装死 7 ✅）· L1 库 **73 条（E1–E73）**、检索 73/73 PASS · 7 个 systemd timer 全部按期 · 今日笔记两处写入齐全 · 茶馆无新内容。git clean。
-> **本轮的核心教训（两条，同一个家族）**：**「没检查」和「检查通过」在报告里长得一模一样。** 上一轮我把「cron 任务改成 disabled」当成纯粹的架构调整，没意识到 **`cron list` 是巡检的输入源** —— 架构一变，巡检的**视野**就变了，而巡检自己毫无察觉地继续报绿。→ **凡是「把对象从某个列表里移走」的改动，都要问「谁在拿这个列表当输入？」** —— 这次的回答是：巡检的【D】组和【S】组都在拿它。
-> **顺带修正我 09:15 的一个错误结论**：我曾说 6 天失败是「3 次重试各重注入 60k 上下文 → 放大额度消耗」。**查实后不成立** —— 那 3 轮是 **fallback 链**（M3 → M2.7-highspeed → M2.7），每模型 4 次尝试共 12 次，且 `usage` **全为 0**（请求在计费前就被拒，**没烧 token**）。真正的病灶是另一件事：**全程 0 次工具调用 → preflight 一次都没跑到** → **闸门装在了它要守的东西里面**（额度耗尽时 agent 连第一个工具调用都发不出去）。
-## 🔍 15:00 心跳补记（保留前缀的陷阱 —— 我写的行被巡检「清理」掉了）
+> **最后更新**: 2026-11-16 17:55
+> **状态**: ✅ **11-16 17:55 心跳（闸门架构的第一次真实验收 —— 通过）**：上一轮把闸门、断言、漂移检查都写完了，但**都是手动触发的**。本轮做了一件该做的事：**用 systemd 手动 start 那个 service，模拟明天 09:00 timer 的真实路径**，把整条链**从 systemd 一路验到产出**。
+> **验收结果（全链路实测，不是推断）**：
+> ```
+> systemctl start openclaw-daily-learning.service
+>   → status=0/SUCCESS（10s CPU）
+>   → 闸门日志 memory/healthcheck-logs/daily-learning-gate-2026-11-16-174715.txt
+>     [daily-learning-gate] ✅ 额度预检通过 → 放行
+>     [daily-learning-gate] 🚀 触发 cron 任务 daily-learning (0fd94dba-…)…
+>     [daily-learning-gate]   |   "enqueued": true
+>     [daily-learning-gate] GATE_RESULT=triggered rc=0
+>   → 【G2】断言能读到这份真实日志：「闸门最近 1 次运行无连续跳过」✅
+>   → agentTurn 真跑：session 09:47:25Z 起，**lastStatus=ok, dur=470994ms,
+>     delivery=delivered, consecErr=0**，笔记写到 7626 字节、字数检查 PASS
+> ```
+> **结论：systemd → service → 闸门 → 预检 → cron run → agentTurn → 投递 → 笔记落盘**，**每一段都实测通了**。明天 09:00 的自动触发只是把同一个 service 由 timer 唤醒而已（`TriggeredBy: ● openclaw-daily-learning.timer` 已在 status 里确认）。
+> **本轮顺手修的（上一轮遗留的真问题）**：闸门把跳过的 reason **写死成 quota**，而【G2】断言**只看 result 不看 reason** → 上游 529 连续抖 3 次会被报成「额度长期枯竭，**需要充值**」→ **假警报**（E66，让牛哥哥为一个不是他的问题掏钱）。已修：闸门侧加 `_classify_reason()`（quota / upstream_busy / rate_limited / unknown），断言侧加 `parse_reason()` 并**按原因区分措辞**；还处理了**老日志没有 reason 字段**的边界 → 老实说「原因未记录」，**不凭空指控充值**。新增单测 `scripts/test_gate_skip_reasons.py`（23 用例全 PASS）+ 端到端实测（写 `reason=upstream_busy` → 断言读回 → 报「不用充值」✅）。
+> **巡检 PASS=80 FAIL=0 WARN=4 等你=2** · 漂移 57/57 ✅ · 回归 10 套全绿 · L1 库 **75 条（E1–E75）**（新增 E75「手写内容会被自动清理吃掉」）、检索 75/75 PASS · 7 个 systemd timer 全部按期 · 茶馆 16:15 轮新增 0 条。git clean。
+> **本轮的核心教训（关于「验收」这个词）**：**手动跑通 ≠ 自动跑通。** 前几轮所有验证都是我用 `python3 scripts/xxx.py` 直接调的 —— 那样**绕过了 systemd 单元本身**（ExecStart 拼写错、SuccessExitStatus 没设、WorkingDirectory 不对，**全都测不出来**）。而 systemd 是这套架构的**骨架**（闸门能生效完全靠它在 OpenClaw 之外）。→ **凡是把关键路径搬到了新执行环境，就必须在那个环境里跑一次真的** —— 不是在旁边的环境里跑同一个脚本。这条和 E71 的「加断言要问它落到哪一栏」、E74 的「信号要接到该修的那根线上」是同一族：**做对了但没人验证的那部分，等于没做。**
+> **仍需牛哥哥决策的长期项**：MiniMax Token Plan **额度周期性耗尽** —— 两个 agentTurn 任务都已有闸门保护（额度不够就秒级跳过，不再空转 300s），且**连续跳过 ≥3 次会被巡检报出来、且能分清是不是真该充值**；但**额度本身还是得充值**（充值/升级，或加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证（arkcode/glmcode/qwen/kimicode）待清理。
+> **新记的待办（不阻塞）**：① preflight 结论还没写进 cron 的 run summary → 让失败**可归因**（闸门日志里有，但 run summary 里没有，巡检要看要跨两个数据源）；②【U】基线样本可考虑 P75 或扩大窗口；③ **闸门日志目录 `memory/healthcheck-logs/` 在 .gitignore 里** —— 这是对的（日志不是源码），但意味着**闸门的历史只在本地** → 若要长期趋势，建议单独存一份精简的结构化记录（如 `memory/gate-history.jsonl`，只留日期+result+reason）。
 
 **现象**：14:47 写的「**巡检现状**：PASS=80 ...」那行**又不见了**。
 **根因**：**那行是我自己写的**，而「**巡检现状**」是**保留前缀** ——
