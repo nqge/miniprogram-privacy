@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import datetime
+from pathlib import Path
 
 
 # 「本该发什么」—— E55 的核心维度
@@ -258,18 +259,47 @@ def main() -> int:
     # 只能用环境变量，且只影响本子进程。
     env = dict(os.environ)
     env.setdefault("OPENCLAW_LOG_LEVEL", "warn")
-    try:
-        r = subprocess.run(
-            ["openclaw", "cron", "list", "--json"],
-            capture_output=True, text=True, timeout=90, env=env,
-        )
-        d = json.loads(r.stdout[r.stdout.find("{"):])
-    except Exception as e:
-        print(f"FAIL cron 状态读取 — {type(e).__name__}")
-        return 1
 
-    jobs = d if isinstance(d, list) else d.get("jobs", d.get("data", []))
+    # ⚠️ 2026-11-16 修正（防「断言装死」）：
+    #   原来用 `openclaw cron list --json` 取任务 —— 但它**不列出已禁用的任务**。
+    #   2026-11-16 起 daily-learning / daily-reflection 都改由 **systemd 闸门触发**
+    #   （cron 里 disabled，只作为被触发的目标）→ `cron list` 返回 "No cron jobs"
+    #   → 这个循环**一次都不跑** → 【D】组**什么都没检查却显示通过**。
+    #
+    #   这正是「断言装死」：报告全绿，但检查对象已经不在视野里了。
+    #   （同族教训：【X】组专门防「解析器坏了却不报错」。）
+    #
+    #   修法：直接读 cron 的**任务存储**（同一份数据源，只是不按 enabled 过滤）。
+    #   读不到再回退到 `cron list`。
+    jobs = None
+    try:
+        jobs_file = Path("/root/.openclaw/cron/jobs.json")
+        if jobs_file.exists():
+            d = json.loads(jobs_file.read_text(encoding="utf-8"))
+            jobs = d if isinstance(d, list) else d.get("jobs", d.get("data", []))
+    except Exception as e:
+        print(f"WARN cron 任务存储读取失败（{type(e).__name__}）→ 回退到 cron list")
+        jobs = None
+
+    if jobs is None:
+        try:
+            r = subprocess.run(
+                ["openclaw", "cron", "list", "--json"],
+                capture_output=True, text=True, timeout=90, env=env,
+            )
+            d = json.loads(r.stdout[r.stdout.find("{"):])
+            jobs = d if isinstance(d, list) else d.get("jobs", d.get("data", []))
+        except Exception as e:
+            print(f"FAIL cron 状态读取 — {type(e).__name__}")
+            return 1
+
     failed = 0
+    # ⚠️ 一个任务都没读到 → 必须在报告里**显式说出来**，
+    #    否则「检查了 0 个任务」和「检查了 2 个任务全部通过」长得一模一样。
+    if not jobs:
+        print("FAIL 读不到任何 cron 任务 —— 【D】组本次**什么都没检查**（断言装死）")
+        print("__FAILED__=1")
+        return 1
 
     for j in jobs:
         name = j.get("name", "?")

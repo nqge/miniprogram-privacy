@@ -73,6 +73,10 @@ UNITS = {
         "enabled": True,
         "checks": [],
     },
+    "openclaw-daily-reflection.timer": {
+        "enabled": True,
+        "checks": [],
+    },
     "openclaw-healthcheck.service": {
         "enabled": False,  # 由 timer 触发
         "checks": [
@@ -96,6 +100,13 @@ UNITS = {
         "enabled": False,  # 由 timer 触发
         "checks": [
             ("ExecStart", "run_logged.sh daily-learning-gate", "每日学习闸门执行入口"),
+        ],
+    },
+    # 2026-11-16 新增：daily-reflection 的额度闸门（与 daily-learning 同一个脚本）
+    "openclaw-daily-reflection.service": {
+        "enabled": False,  # 由 timer 触发
+        "checks": [
+            ("ExecStart", "run_logged.sh daily-reflection-gate", "每日反思闸门执行入口"),
         ],
     },
 }
@@ -131,6 +142,11 @@ TIMERS = {
     # 所以「额度耗尽」这个故障不会影响闸门本身（这正是不变量）。
     "openclaw-daily-learning.timer": [
         ("TimersCalendar", "OnCalendar", "每日 09:00"),
+        ("Persistent", None, "关机/休眠错过的会补跑"),
+    ],
+    # 2026-11-16 新增：daily-reflection 闸门（周日 07:00）
+    "openclaw-daily-reflection.timer": [
+        ("TimersCalendar", "OnCalendar", "每周日 07:00"),
         ("Persistent", None, "关机/休眠错过的会补跑"),
     ],
 }

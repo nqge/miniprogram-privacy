@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""daily-learning 的**闸门式**调度器 —— 额度够才启动 agentTurn。
+"""**额度闸门**调度器 —— 额度够才启动 agentTurn（通用的，多任务共用）。
+
+## 支持的任务
+
+    python3 scripts/daily_learning_gate.py --job daily-learning    # 默认
+    python3 scripts/daily_learning_gate.py --job daily-reflection
+
+⚠️ 2026-11-16 扩展：原先只服务 daily-learning。
+   实测 daily-reflection 的失败形态**完全相同**
+   （`All models failed (3)` + 148~312s 空转 + 零产出），
+   而它当时还留在 cron 里自触发 → 同样会空转。
+   → **同一个脚本服务两个任务**，不复制第二份（E11：不抄判据/逻辑）。
 
 ## 为什么需要它（2026-11-16 实测）
 
@@ -41,9 +52,10 @@ cron 指令里虽然写着「开始干活前先跑 `scripts/quota_preflight.py`�
 
 ## 用法
 
-    python3 scripts/daily_learning_gate.py            # 闸门 + 触发
-    python3 scripts/daily_learning_gate.py --check     # 只跑闸门，不触发
-    python3 scripts/daily_learning_gate.py --force     # 跳过闸门，强制触发
+    python3 scripts/daily_learning_gate.py                  # 闸门 + 触发（默认 daily-learning）
+    python3 scripts/daily_learning_gate.py --job daily-reflection
+    python3 scripts/daily_learning_gate.py --check          # 只跑闸门，不触发
+    python3 scripts/daily_learning_gate.py --force          # 跳过闸门，强制触发
 """
 
 import argparse
@@ -54,12 +66,15 @@ import sys
 from pathlib import Path
 
 WS = Path("/root/.openclaw/workspace")
-JOB_NAME = "daily-learning"
+DEFAULT_JOB = "daily-learning"
 PREFLIGHT = WS / "scripts" / "quota_preflight.py"
+
+# 当前生效的任务名（由 main() 从 --job 设置；模块级默认值保证函数可单测）
+JOB_NAME = DEFAULT_JOB
 
 
 def log(msg):
-    print(f"[daily-learning-gate] {msg}", flush=True)
+    print(f"[{JOB_NAME}-gate] {msg}", flush=True)
 
 
 def find_job_id():
@@ -155,11 +170,15 @@ def trigger(job_id):
 
 
 def main():
+    global JOB_NAME
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="只跑闸门，不触发任务")
     ap.add_argument("--force", action="store_true", help="跳过闸门，强制触发")
+    ap.add_argument("--job", default=DEFAULT_JOB,
+                    help=f"要闸门化的 cron 任务名（默认 {DEFAULT_JOB}）")
     args = ap.parse_args()
 
+    JOB_NAME = args.job
     job_id = find_job_id()
     if not job_id:
         log("GATE_RESULT=error reason=cron_job_not_found")
