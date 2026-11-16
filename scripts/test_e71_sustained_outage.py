@@ -92,11 +92,23 @@ span_hourly = ccd._outage_span_days(runs_hourly)
 check("每小时一次连挂 6 次 → 中断 <1 天（次数相同但严重性不同）",
       span_hourly <= 1, f"实际 {span_hourly}")
 
-# 连续失败后恢复了 → 跨度是「最后一次成功 → 最近一次失败」
+# 连续失败后恢复了 → 跨度是「最后一次成功 → 最后一次失败」
 runs_recover = mk_runs(["error", "error", "ok", "error", "error", "error"])
 check("连续 3 次失败（最近一次失败）→ 跨度按最后成功算",
       ccd._outage_span_days(runs_recover) == 2,
       f"实际 {ccd._outage_span_days(runs_recover)}")
+
+# ⚠️ 2026-11-16 实测 bug：任务**刚恢复**时跨度算错
+# 旧写法把终点取成「最新一次运行」（= 恢复成功的那次 ok），
+# 于是 11-09 成功 → 11-15 最后一次失败 → 11-16 恢复，
+# 被算成「11-16 − 11-09 = 1 天」，把**6 天的中断**报成 1 天。
+runs_just_recovered = mk_runs(
+    ["ok", "error", "error", "error", "error", "error", "error", "ok"],
+    start_ms=1795000000000,
+)
+check("刚恢复的任务 → 跨度按「最后失败」算，不是按「现在」算",
+      ccd._outage_span_days(runs_just_recovered) == 6,
+      f"实际 {ccd._outage_span_days(runs_just_recovered)}（bug 时为 1）")
 
 # ---------------------------------------------------------------- ③
 print("\n【③】空输入不崩（E11：不许崩）")

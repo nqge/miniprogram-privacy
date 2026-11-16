@@ -139,29 +139,51 @@ def _outage_span_days(runs):
     **同样的次数，运维含义差了两个数量级**。
     → 所以断言的是**日历跨度**，不是次数。
 
-    判据：从最近一次成功之后，到最近一次运行，中间隔了几天。
+    判据：找到**最近的一段连续失败**，量「它前面最后一次成功 → 这段里最后一次失败」
+    跨了多少天。
+
+    ⚠️ 关键（2026-11-16 实测 bug）：**终点必须是故障本身，不能是「现在」**。
+    旧写法取「最新一次运行 − 最后一次成功」，结果：
+      11-09 成功 → 11-10~11-15 连挂 6 次 → 11-16 恢复
+      旧算法：11-16(最新, ok) − 11-09 = **1 天** ← 把 6 天的中断报成 1 天
+      正确：  11-15(最后失败) − 11-09 = **6 天**
+    → 一旦任务恢复，旧的算法就会把历史中断**缩到最短** ——
+      正好抹掉最该记住的那段。所以要**独立地找失败段**，而不是「顺着最近一次成功算」。
+
+    → 更通用的教训：**算「持续了多久」时，终点必须是故障本身**。
+      用「现在」当终点，恢复后就归零 —— 而那正是最该留痕的时刻。
     """
     if not runs:
         return 0
-    last_ok = None
-    last_run = None
+    times = []
     for r in runs:
         ms = r.get("runAtMs")
-        if not isinstance(ms, (int, float)):
-            continue
-        if last_run is None:
-            last_run = ms
-        if r.get("status") == "ok":
-            last_ok = ms
-            break
-    if last_ok is None or last_run is None:
-        # 全都是失败 → 用「最早一次失败到现在」当跨度
-        times = [r.get("runAtMs") for r in runs
-                 if isinstance(r.get("runAtMs"), (int, float))]
-        if not times:
-            return 0
-        return max(1, round((max(times) - min(times)) / 86400000) + 1)
-    return max(1, round((last_run - last_ok) / 86400000))
+        if isinstance(ms, (int, float)):
+            times.append((ms, r.get("status")))
+    if not times:
+        return 0
+    # times 是倒序（最新在前）→ 从新到旧扫，找出**最近的一段连续失败**
+    i = 0
+    while i < len(times) and times[i][1] != "error":
+        i += 1
+    if i >= len(times):
+        return 0   # 最近一次是成功，且往前没有失败段
+    # 失败段 = times[i:j]，j 是这段之后（更旧）的第一个成功
+    j = i
+    while j < len(times) and times[j][1] == "error":
+        j += 1
+    last_fail = times[i][0]          # 失败段里**最新**的一次
+    first_fail = times[j - 1][0]     # 失败段里**最旧**的一次
+    if j < len(times):
+        last_ok = times[j][0]        # 失败段之前的那次成功
+        return max(1, round((last_fail - last_ok) / 86400000))
+    # 失败段之前没有成功 → 全程都在挂 → 用「最早一次失败到现在」
+    # ⚠️ +1：这是**日历天数**，不是时间差。
+    #   每天挂一次、共 6 次 → 覆盖的是 6 个日历日（11-10,11,12,13,14,15）
+    #   而 11-15 − 11-10 = 5 个「日期间隔」→ 不 +1 会少算 1 天。
+    #   「任务已经坏了几天」问的是**有几天没产出**，那是日历天的个数。
+    newest = times[0][0]
+    return max(1, round((newest - first_fail) / 86400000) + 1)
 
 
 def _is_quota_exhausted(err: str) -> bool:
