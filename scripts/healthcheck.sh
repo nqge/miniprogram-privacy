@@ -735,6 +735,36 @@ while IFS= read -r line; do
 done <<< "$note_report"
 PASS=$((PASS + 1))
 
+# ── G2. 额度闸门的跳过信号（E74）──────────────────
+# 2026-11-16 加:
+#   额度闸门(systemd timer → daily_learning_gate.py)把「额度耗尽」
+#   从「跑 300s 空转、零产出」变成「秒级跳过、不启动 agent」——
+#   但闸门把 GATE_RESULT=skipped 写进日志后,**巡检从来不读那些日志**。
+#   → 额度长期枯竭的话,闸门一天天跳过,**巡检一条都不提**。
+#
+#   这正是 E71 那个坑的翻版:「信号算出来了、写进日志了,
+#   但没接到『该修』的那根线上」。
+#   E71 是「连续失败被判成 WARN」,本条是「连续跳过连日志都没人读」。
+#
+#   判据真身: scripts/check_gate_skips.py(自检 --self-test)
+echo ""
+echo "【G2】额度闸门跳过信号"
+
+gate_report=$(python3 "$WORKSPACE/scripts/check_gate_skips.py" 2>/dev/null)
+gate_fail=$(echo "$gate_report" | grep -oP '__G_FAILED__=\K[0-9]+'); gate_fail=${gate_fail:-0}
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$gate_report"
+# PASS 行数由脚本输出决定(可能 0 行——比如没日志时只输出 PASS 那一行),
+# 这里按实际 PASS 行数计,避免硬编码常数过期(【D】组的老教训)
+gate_pass_count=$(printf '%s\n' "$gate_report" | grep -c '^PASS')
+gate_pass_count=${gate_pass_count:-0}
+PASS=$((PASS + gate_pass_count - gate_fail))
+
 # ── G. 独立技能仓库同步 ───────────────────────────
 echo ""
 echo "【G】独立技能仓库同步"

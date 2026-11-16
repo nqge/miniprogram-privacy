@@ -1,12 +1,52 @@
 # SESSION-STATE.md
 
-> **最后更新**: 2026-11-16 14:20
+> **最后更新**: 2026-11-16 14:20（14:35 补记见下）
 > **状态**: ✅ **11-16 14:20 心跳（把「额度闸门」架构做完整 + 抓到一个我自己引入的「断言装死」）**：本轮把上一轮的闸门做完整，并**发现上一轮的做法埋了一个新的静默失效**。
 > **① 闸门扩展到 daily-reflection** —— 实测它的失败形态与 daily-learning **完全相同**（`All models failed (3)` + 148~312s 空转 + 零产出）。`scripts/daily_learning_gate.py` **泛化**为 `--job` 多任务共用（**不复制第二份**，E11）；新增 `openclaw-daily-reflection.timer`（周日 07:00, Persistent）；它的 cron 调度也禁用。漂移检查 50 → **57 项**。顺带查到一件事实：**daily-reflection 从未在计划槽位上成功过**（4 次成功全是手动补跑）。
 > **② 抓到我自己引入的「断言装死」回归** ⚠️ —— 两个任务都禁用后，`openclaw cron list` 返回 **「No cron jobs」**；而 `check_cron_delivery.py` 原来是从 `cron list` 取列表的 → `for j in jobs:` 循环体**一次都不跑** → `__FAILED__=0` → **【D】组一条断言都没检查，却显示「全部通过」**。**这是我上一轮改架构时顺手带出来的**，而且它恰好落在「报告说没问题、检查对象却不在视野里」这个家族上（E69 探针撒谎 / E71 分类降级 / 【X】解析器装死 / E73 终点取错）。修法：① 改读 `cron/jobs.json`（同一份数据源，不按 enabled 过滤）；② 加**显式失败分支** —— 一个任务都没读到就报「本次**什么都没检查**（断言装死）」并 exit 1；③ 新增单测 `scripts/test_cron_delivery_no_jobs.py`（7 用例，**含真实故障注入**：把存储改名 + 伪造 `cron list` 返回空 → 断言必须返回非 0）。
 > **③ 巡检 PASS=78 FAIL=0 WARN=4 等你=2** · 漂移 57/57 ✅ · 回归全绿（解析器 ✅ ·【V】13 ✅ ·【W2】30 ✅ ·【W3】12 ✅ ·【W4】14 ✅ · 额度分类 30 ✅ · 预检 18 ✅ · E71 17 ✅ ·【U】自检 ✅ · 断言装死 7 ✅）· L1 库 **73 条（E1–E73）**、检索 73/73 PASS · 7 个 systemd timer 全部按期 · 今日笔记两处写入齐全 · 茶馆无新内容。git clean。
 > **本轮的核心教训（两条，同一个家族）**：**「没检查」和「检查通过」在报告里长得一模一样。** 上一轮我把「cron 任务改成 disabled」当成纯粹的架构调整，没意识到 **`cron list` 是巡检的输入源** —— 架构一变，巡检的**视野**就变了，而巡检自己毫无察觉地继续报绿。→ **凡是「把对象从某个列表里移走」的改动，都要问「谁在拿这个列表当输入？」** —— 这次的回答是：巡检的【D】组和【S】组都在拿它。
 > **顺带修正我 09:15 的一个错误结论**：我曾说 6 天失败是「3 次重试各重注入 60k 上下文 → 放大额度消耗」。**查实后不成立** —— 那 3 轮是 **fallback 链**（M3 → M2.7-highspeed → M2.7），每模型 4 次尝试共 12 次，且 `usage` **全为 0**（请求在计费前就被拒，**没烧 token**）。真正的病灶是另一件事：**全程 0 次工具调用 → preflight 一次都没跑到** → **闸门装在了它要守的东西里面**（额度耗尽时 agent 连第一个工具调用都发不出去）。
+## 🔍 14:35 心跳补记（给闸门接上「跳过」信号 —— E74）
+
+**复查 14:20 那轮的闸门架构时，发现一个它自己没接上的洞**：
+闸门把 `GATE_RESULT=skipped reason=quota` 写进
+`memory/healthcheck-logs/<name>-gate-*.txt`，**而巡检从来不读那些文件**。
+→ 额度**长期**枯竭的话，闸门会一天天跳过，**巡检一条都不提** ——
+额度问题又退化成「背景噪音」（正是 E71 那个坑的翻版）。
+
+**本轮产出**：① **新提升 L1 E74（第 74 条）**「闸门太安静就没人在乎，连续跳过必须有人读」
+→ 核心断言：**故障被修好** 和 **故障被看见** 是两件事；
+**降噪的同时可能顺手把告警降没了** —— 闸门让故障修好了，但信号也跟着消失了。
+② **新增巡检【G2】组**（判据真身 `scripts/check_gate_skips.py`，E11 不抄判据）：
+读闸门日志 → 统计**最近连续跳过次数** → **连续 ≥3 次 → FAIL**，1-2 次 → WARN；
+用**结构化标记** `GATE_RESULT=` 而非 grep 自然语言。
+③ **单测 11 用例全 PASS**，含**真实故障注入**。
+④ **【G2】把巡检组数 30 → 31**（说明清单已同步，【Q】PASS）。
+
+**⚠️ 本轮自己踩了两次「判据装死」，都被自检/注入当场抓住（都值得记）**：
+- **第一次**：判据按**完整文件名**分组，而不是按**闸门名**分组
+  → 每份日志自成一组，「连续跳过」永远算成 1 次 → **自检当场 FAIL**；
+- **第二次**：正则用 `^GATE_RESULT=` + `re.M`，而真实日志行是
+  `[daily-learning-gate] GATE_RESULT=skipped ...`（**行首有前缀**）→ `^` 匹配不上
+  → **故障注入 3 份 skipped 日志，判据仍报「尚未运行过」= 装死**
+  → 注入当场抓到，已把「真实文件注入」写成第 8 个用例防复发。
+→ **教训**：**判据写完必须用真实数据故障注入验证** —— 单元测试里的假数据
+  恰好绕开了正则的边界（E11 的老教训又一次）。
+
+**巡检现状**：**PASS=80 FAIL=0 WARN=4 等你=2**（31 组）· 漂移 57/57 ✅ ·
+回归全绿（解析器 ✅ ·【V】13 ✅ ·【W2】30 ✅ ·【W3】12 ✅ ·【W4】14 ✅ ·
+额度分类 30 ✅ · 预检 18 ✅ · E71 17 ✅ · 装死 7 ✅ ·【U】自检 ✅ ·【G2】11 ✅）·
+L1 库 **74 条（E1–E74）**、检索 **74/74 PASS**（E74 排名第 1 · 0.4431）·
+两个闸门 timer 已装（daily-learning 明天 09:00 / daily-reflection 周日 07:00）·
+闸门 `--check` 实跑 ✅ 额度预检通过（当前额度可用）。
+
+**仍需牛哥哥决策的长期项（未变）**：MiniMax Token Plan **额度周期性耗尽** ——
+现在两个 agentTurn 任务都有闸门保护（额度不够就秒级跳过，不再空转 300s），
+且**「连续跳过」已被巡检接住**（E74），但**额度本身还是得充值**
+（充值/升级，或加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 →
+provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理。
+
 > **新架构（现在长这样）**：
 > ```
 > systemd timer（09:00 / 周日 07:00）
@@ -275,7 +315,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 30 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=78 FAIL=0 WARN=4
+**巡检现状**: 31 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=80 FAIL=0 WARN=4
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -298,16 +338,16 @@
 > ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。
 
 **cron 任务**:
-- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (1276s)
-- `daily-reflection` — cron 0 7 * * 0 · timeout 900s · last: error (217s)
 
 **systemd timers（纯脚本任务，不消耗模型额度）**:
-- `openclaw-quick-health.timer` — 下次 Mon 2026-11-16 09:47:18 CST
-- `openclaw-teahouse-monitor.timer` — 下次 Mon 2026-11-16 12:15:00 CST
+- `openclaw-quick-health.timer` — 下次 Mon 2026-11-16 14:52:18 CST
+- `openclaw-teahouse-monitor.timer` — 下次 Mon 2026-11-16 16:15:00 CST
 - `launchpadlib-cache-clean.timer` — 下次 Mon 2026-11-16 19:42:18 CST
 - `openclaw-backup-audit.timer` — 下次 Tue 2026-11-17 03:00:00 CST
 - `openclaw-log-cleanup.timer` — 下次 Tue 2026-11-17 04:30:00 CST
 - `openclaw-healthcheck.timer` — 下次 Tue 2026-11-17 07:00:00 CST
+- `openclaw-daily-learning.timer` — 下次 Tue 2026-11-17 09:00:00 CST
+- `openclaw-daily-reflection.timer` — 下次 Sun 2026-11-22 07:00:00 CST
 
 **plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw
 <!-- END:gen_system_status -->
