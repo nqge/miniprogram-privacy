@@ -92,10 +92,29 @@ check("合并后 3 次 skipped 在 triggered 之前",
 
 # ---------------------------------------------------------------- ④
 print("\n【④】「连续」判定必须建立在正确顺序上")
-# 正确顺序下：最新是 triggered（成功）→ 连续跳过 = 0
+# 正确顺序下：11-14/15/16 09:00 连跳 3 次，11-16 17:47 才 triggered
+# → 当前 streak（从最新往回数）= 0，但**历史上有一段连续 3 次的跳过**
+#
+# ⚠️ 2026-11-16 18:30 修正语义（这一条我一开始写反了）：
+#   原断言写「最新是成功 → 不报 FAIL（连续被打断）」——
+#   但那正是我 09:15 自己犯过的 bug（`_outage_span_days` 用
+#   「最新一次运行 − 最后一次成功」当跨度 → **任务一恢复，
+#   6 天的中断被缩成 1 天，正好抹掉最该留痕的那段**）。
+#
+#   → 正确语义：**连续段必须独立地扫整段历史找出来**，
+#     「已经恢复」不该让「额度枯竭了 3 天」这件事消失。
+#     报告措辞要区分「还在跳」和「已恢复」两种情况。
 p, w, d = cgs.judge(merged)
-check("最新是成功 → 不报 FAIL（连续被打断）",
-      not p, p[0] if p else "")
+check("连跳 3 次后恢复 → 仍要报 FAIL（恢复不该掩盖中断）",
+      bool(p), f"没报: problems={p} warns={w}")
+check("措辞区分「现已恢复」",
+      bool(p) and "现已恢复" in p[0], p[0] if p else "")
+check("窗口内 best_streak = 3",
+      d.get("daily-learning-gate", {}).get("best_streak") == 3, d)
+check("当前 streak（从最新往回数）= 0",
+      d.get("daily-learning-gate", {}).get("consecutive_skipped") == 0, d)
+check("recovered 标记为 True",
+      d.get("daily-learning-gate", {}).get("recovered") is True, d)
 
 # 同一份数据，**只差归一化**这一件事 → 对比两种排序的结论。
 #

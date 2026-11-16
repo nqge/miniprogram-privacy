@@ -206,7 +206,7 @@ def judge(logs):
         by_name.setdefault(name, []).append((ts, res, reason))
 
     for name, rows in sorted(by_name.items()):
-        # 从最新往回数连续 skipped
+        # 从最新往回数连续 skipped（**当前**还在跳的这段）
         consecutive = 0
         reasons: list[str] = []
         for _ts, res, reason in reversed(rows):
@@ -216,12 +216,49 @@ def judge(logs):
                     reasons.append(reason)
             else:
                 break
+
+        # ⚠️ 2026-11-16 18:25 补（关键修正）：
+        #   上面那段只覆盖「**现在还在跳**」的情况。
+        #   但闸门连跳 3 天、**第 4 天恢复了**的形态更常见 ——
+        #   而那时 `consecutive` = 0 → **完全不报** →
+        #   「额度枯竭了 3 天」这件事被恢复**掩盖**了。
+        #
+        #   这正是我 09:15 自己犯过的那个 bug（`_outage_span_days` 用
+        #   「最新一次运行 − 最后一次成功」当跨度 → 任务一恢复，
+        #   6 天的中断被缩成 1 天，正好抹掉最该留痕的那段）。
+        #   → **连续段必须独立地找，不能只从最新一条往回数。**
+        #
+        #   判据：扫**整段历史**，找**最近的一段**连续 skipped（长度 ≥ 阈值即报），
+        #   并区分「还在跳」和「已恢复」两种措辞。
+        best_streak = 0          # 窗口内最近的一段连续跳过长度
+        best_end_idx = -1        # 那段的结束下标（最新那条在最后）
+        cur = 0
+        for i, (_ts, res, _r) in enumerate(rows):
+            if res == "skipped":
+                cur += 1
+            else:
+                cur = 0
+            if cur >= best_streak:
+                best_streak = cur
+                best_end_idx = i
+        # 该段里的原因
+        streak_reasons: list[str] = []
+        if best_streak > 0:
+            for (_ts, res, reason) in rows[best_end_idx - best_streak + 1: best_end_idx + 1]:
+                if res == "skipped" and reason:
+                    streak_reasons.append(reason)
+        recovered = best_streak >= FAIL_CONSECUTIVE and consecutive < FAIL_CONSECUTIVE
+
         detail[name] = {
             "n_logs": len(rows),
             "consecutive_skipped": consecutive,
+            "best_streak": best_streak,
+            "best_streak_end_ts": rows[best_end_idx][0] if best_end_idx >= 0 else None,
+            "recovered": recovered,
             "last_result": rows[-1][1],
             "last_ts": rows[-1][0],
             "reasons": sorted(set(reasons)),
+            "streak_reasons": sorted(set(streak_reasons)),
         }
 
         # ⚠️ 2026-11-16：措辞必须**忠实反映跳过原因**。
@@ -234,10 +271,10 @@ def judge(logs):
         # ⚠️ 老日志（修复前写的）没有结构化 reason → reasons 为空。
         #   **不能**当成 quota（那是凭空指控「该充值」），也不能说成「上游侧」（那是凭空归因）。
         #   → 老实说「原因未记录」。
-        uniq = sorted(set(reasons))
+        uniq = sorted(set(streak_reasons or reasons))
         all_quota = bool(uniq) and all(r == "quota" for r in uniq)
         any_quota = "quota" in uniq
-        if consecutive >= FAIL_CONSECUTIVE:
+        if best_streak >= FAIL_CONSECUTIVE:
             if all_quota:
                 why = "额度长期枯竭，需要充值（E74）"
             elif any_quota:
@@ -250,9 +287,22 @@ def judge(logs):
             else:
                 why = (f"跳过原因**不是额度**（上游侧：{','.join(uniq)}）"
                        "→ 不用充值，先看上游是否恢复（E74）")
-            problems.append(
-                f"{name} 最近连续 {consecutive} 次被闸门跳过"
-                f"-- 最后一次 {rows[-1][0]}，已连续跳过 {consecutive} 次；{why}"
+            if recovered:
+                # 措辞要区分：**已经恢复了**，但历史里有一段连续跳过
+                problems.append(
+                    f"{name} 最近曾连续 {best_streak} 次被闸门跳过"
+                    f"（截至 {detail[name]['best_streak_end_ts']}，现已恢复）"
+                    f" -- {why}（E74）")
+            else:
+                problems.append(
+                    f"{name} 最近连续 {consecutive} 次被闸门跳过"
+                    f"-- 最后一次 {rows[-1][0]}，已连续跳过 {consecutive} 次；{why}"
+                )
+        elif best_streak >= 2:
+            # 曾经连续跳过 2 次（不到阈值），但**已经恢复** → 值得提一句
+            rs = ",".join(sorted(set(streak_reasons))) if streak_reasons else "未记录"
+            warns.append(
+                f"{name} 最近曾连续 {best_streak} 次被闸门跳过（原因 {rs}），现已恢复"
             )
         elif consecutive >= 1:
             rs = ",".join(sorted(set(reasons))) if reasons else "未记录"
@@ -375,6 +425,46 @@ def self_test() -> int:
 
     # 11) 不存在的历史文件不炸
     assert collect_history(path=Path("/nonexistent/gate-history.jsonl")) == []
+
+    # 12) ⚠️ 关键回归：**连跳 N 次后恢复**，不能因为恢复就不报
+    #   这正是我 09:15 自己犯过的 bug（`_outage_span_days` 用
+    #   「最新一次 − 最后一次成功」当跨度 → 任务一恢复，6 天的中断被缩成 1 天，
+    #   正好抹掉最该留痕的那段）。
+    #   → 连续段必须**独立地扫整段历史**找出来，不能只从最新一条往回数。
+    rows_recover = [
+        ("daily-learning-gate", "2026-11-17-090000", "skipped", "quota"),
+        ("daily-learning-gate", "2026-11-18-090000", "skipped", "quota"),
+        ("daily-learning-gate", "2026-11-19-090000", "skipped", "quota"),
+        ("daily-learning-gate", "2026-11-20-090000", "ok", "gate_passed"),
+    ]
+    pr, wr, dr = judge(rows_recover)
+    assert pr, f"连跳 3 次后恢复也必须报（别让恢复掩盖中断）: {pr} {wr}"
+    assert "现已恢复" in pr[0], pr[0]
+    assert dr["daily-learning-gate"]["best_streak"] == 3, dr
+    assert dr["daily-learning-gate"]["recovered"] is True, dr
+    assert dr["daily-learning-gate"]["consecutive_skipped"] == 0, dr
+
+    # 13) 恢复后的措辞不能指控充值，除非 reason 确实是 quota
+    rows_busy = [
+        ("daily-learning-gate", "2026-11-17-090000", "skipped", "upstream_busy"),
+        ("daily-learning-gate", "2026-11-18-090000", "skipped", "upstream_busy"),
+        ("daily-learning-gate", "2026-11-19-090000", "skipped", "upstream_busy"),
+        ("daily-learning-gate", "2026-11-20-090000", "ok", "gate_passed"),
+    ]
+    pb, wb, _ = judge(rows_busy)
+    assert pb, "连跳 3 次（上游原因）也要报"
+    assert "不用充值" in pb[0] or "不是额度" in pb[0], pb[0]
+    assert "需要充值" not in pb[0], f"上游原因不该指控充值: {pb[0]}"
+
+    # 14) 连跳 2 次后恢复 → 不到阈值 → WARN 而不是 FAIL
+    rows_two = [
+        ("daily-learning-gate", "2026-11-19-090000", "skipped", "quota"),
+        ("daily-learning-gate", "2026-11-20-090000", "skipped", "quota"),
+        ("daily-learning-gate", "2026-11-21-090000", "ok", "gate_passed"),
+    ]
+    p2, w2, d2 = judge(rows_two)
+    assert not p2, f"2 次不到阈值不该 FAIL: {p2}"
+    assert w2, "2 次连跳后恢复应给 WARN"
 
     print("【G】闸门跳过判据自检: ✅ 全部通过")
     return 0
