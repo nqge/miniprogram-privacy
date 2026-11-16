@@ -1,5 +1,16 @@
 # SESSION-STATE.md
 
+> **最后更新**: 2026-11-16 09:22
+> **状态**: ✅ **11-16 09:22 心跳（E72：超时余量要看基线，不要看「最近一次」—— 拆出判据真身 + 修好一条从没触发过的规则）**：本轮从 **09:00 daily-learning 跑了 1276s** 这件事入手，一路挖到**巡检判据本身有两个从未触发的 bug**。
+> **发现（连起来看才对）**：① 09:22 巡检报 `FAIL daily-learning 最近一次耗时 1276s / 超时 1800s = 71% -- 余量告急`，但翻该任务**全部 14 次成功运行**看，**近 10 次中位数只有 673s = 37%** → 那 1276s 是**异常值不是趋势**；② 翻 11-16 那次会话（185 条记录 / 69 个 assistant 回合）才知道那天为什么慢：**补写 4 天缺失笔记 + 新增 L1 E71 + 为修 E53 检索失效重建索引 3 次 + 单独调试检索措辞 6 次 + 跑 5 套回归**；耗时拆解 = **工具 377s（30%）+ 模型推理 899s（70%）**，70% 来自**回合数**不是单步变慢；③ **「上次全绿/本次 FAIL」都是快照**（E70）—— 这一轮是**性能维度的第三个形态**：快照是「那次运行」，不是「这个任务的基线」。
+> **本轮产出**：① **新提升 L1 E72（第 72 条）**「超时余量要看基线不要看最近一次，单次异常负载会把基线带偏」→ 场景/陷阱（三条）/岔路口/对策/关联/边界六段，`verify_l1_retrieval.py` **72/72 PASS**，E72 检索**排名第 1**（独立文件 0.9175 / 主库 0.8511）。② **【U】组判据真身抽到 `scripts/timeout_margin.py`**（E11 规矩：单测 import 真身，不抄判据）—— 判据从 `healthcheck.sh` 的 heredoc 搬出来，**单测 `scripts/timeout_margin.py`（11 用例全 PASS）**。③ **【U】改判据**：FAIL 从「最近一次 > 70%」改为「**成功运行中位数 > 70%**」（抗单点异常）；「最近一次」保留为**展示事实**；最近一次 ≥ 1.5×中位数 时**单独标注「异常负载」**（「任务变慢」和「今天任务变重」修法完全不同，必须分开说）；趋势规则加**日历密度门槛**（相邻样本 > 2 天不算趋势）**且只用成功运行**；成功样本 < 4 个时**降级不判 FAIL**（6 连败会把成功样本挤到只剩 2 个，中位数退化成「异常值+正常值」的平均）；取样从 8 条放宽到 **30 条**。④ **顺带修好一条「从没触发过」的规则**（两个 bug 叠在一起）：「因超时失败 → FAIL」读的是 **deliveryStatus**（error 运行恒为 `'unknown'`）**且**只认 `'timeout'` 一个词，而真实报错是 `'execution timed out'` → **这条断言从来没生效过**；现在读 `error` 字段 + 同时认 `timed out`/`timeout`。⑤ 巡检复跑 **PASS=76 FAIL=0 WARN=6 等你=2**（30 组）。
+> **关键教训（E72 的根因）**：**「单点 FAIL」和「基线 FAIL」是两件事** —— 前者说的是「那次运行」，后者说的是「这个任务」。旧判据把前者当后者用，于是**一次异常负载就报「余量告急」，而且这条假警报会占掉「现在就该修」那一格的真信号**（E66 的反面：判据不看数据分布，就会误判）。→ **给判据加断言时，要同时问「它用的是单点还是基线」**。这和 E70（快照 vs 状态）、E71（连续失败 vs 单次失败）是同一条线上的三个变体。
+> **今日巡检**：全量 **PASS=76 FAIL=0 WARN=6 等你=2**（30 组）· 03:00 backup-audit **PASS=18 FAIL=0 WARN=1**（WARN 是「1 个未提交改动」→ 现已 commit，实际 0 改动）· 记忆索引 **108/108 文件 · 739 块 · Dirty=no** · Embeddings **ready** · L1 库 **72 条（E1–E72）** · 茶馆 **无新内容**（最新摘要仍是 10-26，不硬凑笔记）· 8 个 systemd timer 按期 · 上下文 7%。
+> **仍需牛哥哥决策的长期项（未变）**：MiniMax Token Plan **额度周期性耗尽**（充值/升级 或 加第二把 key 拆配额）—— **daily-learning 已连续 6 次、daily-reflection 已连续 12 次**被它打中（E71 已把这类从 WARN 升级成 FAIL，中断天数一眼可见）；fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）；4 个死亡 provider 凭证（arkcode/glmcode/qwen/kimicode）待清理。
+> **新记的待办（不阻塞）**：① **daily-learning 的 3 次模型级重试会重新注入整份上下文**（11-15 那次 3 次重试 ≈ 180k token 却零产出）→ 这会**放大**额度消耗，值得给 cron 加 `maxRetries: 1` 或换更小的模型跑。② 预检已能在 529 时重试，但 **cron 指令里还没要求「预检重试仍失败就直接放弃并记录」** → 建议把 preflight 的结论写进 run summary，让失败**可归因**。③ **daily-learning 建议挪到 09:30 之后**（11-16 那次 09:00 整点撞上游高峰，首个探测就吃到 HTTP 529）。
+
+<details><summary>11-16 09:15 心跳原始记录（E71 落地 + 预检 529/429 分家 + 补 5 天笔记）</summary>
+
 > **最后更新**: 2026-11-16 09:15
 > **状态**: ✅ **11-16 09:15 心跳（修掉「连续失败被判成 WARN」的降级 —— E71 落地 + 预检 529/429 分家 + 补 5 天笔记）**：本轮**没有靠等额度恢复**，而是先把「额度问题掩盖了 6 天故障」这件事**查到底并修掉**。
 > **发现（连起来看才对）**：① 11-12～11-16 **连续 5 天**的 `memory/YYYY-MM-DD.md` **全部不存在**（daily-learning 每天 09:00 挂在 rate_limit）；② 11-15 的 cron 会话里 **3 次重试**，每次**重新注入整份 ~60k token 上下文**（skills policy + 完整 cron payload + AGENTS/SOUL/TOOLS/MEMORY）却**一个 token 产出都没有**（`usage` 全 0）→ **重试本身在放大额度消耗**；③ 11-16 09:00 那次**真的跑通了**（usage 正常、笔记已写、E71 已入库）→ 说明失败不是「写不出来」，是**额度桶在 09:00 恰好是空的**；④ 11-16 09:00 那次**自己发现了预检脚本的 bug**：整点上游返回 **HTTP 529（overloaded_error）**，而 `quota_preflight.py` 把 529 和 429 一起判成「额度不足」→ **整点被「整点高峰」自己挡住**。
@@ -255,7 +266,7 @@
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 30 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=75 FAIL=0 WARN=3
+**巡检现状**: 30 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=76 FAIL=0 WARN=6
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态
@@ -278,16 +289,16 @@
 > ⚠️ 上面这些 provider **不参与** `primary`/`fallbacks` 路由；若其凭证已失效（如 401/403/余额不足），属于**残留凭证**，需人工确认后清理或充值 —— 别只信 `openclaw.json` 的 provider 列表。
 
 **cron 任务**:
-- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (279s)
-- `daily-reflection` — cron 0 22 * * 0 · timeout 900s · last: error (312s)
+- `daily-learning` — cron 0 9 * * * · timeout 1800s · last: ok (1276s)
+- `daily-reflection` — cron 0 7 * * 0 · timeout 900s · last: error (217s)
 
 **systemd timers（纯脚本任务，不消耗模型额度）**:
-- `openclaw-quick-health.timer` — 下次 Tue 2026-11-03 09:00:18 CST
-- `openclaw-teahouse-monitor.timer` — 下次 Tue 2026-11-03 12:15:00 CST
-- `launchpadlib-cache-clean.timer` — 下次 Tue 2026-11-03 19:30:18 CST
-- `openclaw-backup-audit.timer` — 下次 Wed 2026-11-04 03:00:00 CST
-- `openclaw-log-cleanup.timer` — 下次 Wed 2026-11-04 04:30:00 CST
-- `openclaw-healthcheck.timer` — 下次 Wed 2026-11-04 07:00:00 CST
+- `openclaw-quick-health.timer` — 下次 Mon 2026-11-16 09:47:18 CST
+- `openclaw-teahouse-monitor.timer` — 下次 Mon 2026-11-16 12:15:00 CST
+- `launchpadlib-cache-clean.timer` — 下次 Mon 2026-11-16 19:42:18 CST
+- `openclaw-backup-audit.timer` — 下次 Tue 2026-11-17 03:00:00 CST
+- `openclaw-log-cleanup.timer` — 下次 Tue 2026-11-17 04:30:00 CST
+- `openclaw-healthcheck.timer` — 下次 Tue 2026-11-17 07:00:00 CST
 
 **plugins**: qwen-portal-auth, skillhub, feishu, wecom, adp-openclaw
 <!-- END:gen_system_status -->

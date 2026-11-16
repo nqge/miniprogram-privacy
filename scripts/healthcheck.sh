@@ -2484,11 +2484,18 @@ def durations(name):
     try:
         sys.path.insert(0, '/root/.openclaw/workspace/scripts')
         from cron_runs_helper import read_cron_runs
-        for e in read_cron_runs(CRON_ID_FOR[name], 8):
+        # 取 30 条（不是 8）：2026-11-16 实测，6 连败时只取 8 条
+        # → 成功样本只剩 2 个 → 中位数退化（E72）。
+        # 多读几十条 JSONL 几乎不花时间（helper 直读文件），但样本够了基线才可信。
+        for e in read_cron_runs(CRON_ID_FOR[name], 30):
             dur = e.get('durationMs')
             ts = e.get('runAtMs') or e.get('ts') or 0
             if dur:
-                out.append((ts, dur, e.get('status'),
+                # ⚠️ 第 4 位是 **error**（超时信息在这里），
+                #    不是 deliveryStatus —— error 运行的 deliveryStatus 恒为 'unknown'。
+                #    E72:旧代码把 deliveryStatus 放在第 4 位 → 「因超时失败」那条规则
+                #    读的是错误字段 → **从来没触发过**。
+                out.append((ts, dur, e.get('status'), e.get('error'),
                             e.get('lastDeliveryStatus') or e.get('deliveryStatus')))
     except Exception:
         pass
@@ -2498,6 +2505,12 @@ CRON_ID_FOR = {}
 for j in jobs:
     CRON_ID_FOR[j.get('name')] = j.get('id')
 
+# 2026-11-16 (E72):判据真身已抽到 scripts/timeout_margin.py
+# → 这里只**调用**,不复制判据(E11:抄版会和真版悄悄漂移)
+# 单测:python3 scripts/timeout_margin.py
+sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+from timeout_margin import judge_u
+
 problems = []
 trend_warn = []
 for name, tsec in tos.items():
@@ -2506,26 +2519,16 @@ for name, tsec in tos.items():
     ds = durations(name)
     if not ds:
         continue
-    # ⚠️ 必须按**时间**排序,不能按耗时排序 --
-    # 按耗时排会把「最慢的那次」当成「最近的那次」,
-    # 于是早已修好的 backup-audit(历史 600s 超时)会被当成现状 → 假 FAIL。
-    ds.sort(key=lambda x: x[0])
-    last = ds[-1]
-    ratio = last[1] / 1000.0 / tsec
-    if ratio > 0.7:
-        problems.append(f"{name} 最近一次耗时 {last[1]/1000:.0f}s / 超时 {tsec}s "
-                        f"= {ratio*100:.0f}% -- 余量告急,下次可能撞超时")
-    # 趋势:最近 3 次是否持续上升
-    if len(ds) >= 3:
-        recent = [x[1] for x in ds[-3:]]
-        if recent[0] < recent[1] < recent[2] and recent[2]/1000.0/tsec > 0.5:
-            trend_warn.append(f"{name} 最近 3 次耗时递增 "
-                              f"{recent[0]/1000:.0f}s→{recent[1]/1000:.0f}s→{recent[2]/1000:.0f}s"
-                              f"(超时 {tsec}s)-- 在长")
-    # 因超时而失败的(只看最近一次)
-    ts, dur, st, dl = last
-    if st == 'error' and dl and 'timeout' in str(dl).lower():
-        problems.append(f"{name} 最近因超时失败({dl})-- 见 E35:慢的是等法不是任务")
+    # 真实数据形状: (ts_ms, dur_ms, status, error, deliveryStatus)
+    # ⚠️ 超时信息在 **error** 字段 —— error 运行的 deliveryStatus 恒为 'unknown'。
+    #    (旧判据读 deliveryStatus + 只认 'timeout' 一个词,
+    #     而真实报错是 'execution timed out' → 这条规则从来没触发过,E72 一并修掉)
+    recs = [(e[0], e[1], e[2], e[3], e[4] if len(e) > 4 else None) for e in ds]
+    r = judge_u(recs, tsec)
+    for pr in r["problems"]:
+        problems.append(f"{name} {pr}")
+    for w in r["warns"]:
+        trend_warn.append(f"{name} {w}")
 
 for p in problems:
     print(f"FAIL {p}")
