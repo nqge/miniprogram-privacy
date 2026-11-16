@@ -119,6 +119,27 @@ def find_job_id():
     return None
 
 
+def _classify_reason(reason: str) -> str:
+    """把预检的结论文本映射成**结构化**的 reason 标签。
+
+    ⚠️ 为什么不能只写 "quota"（2026-11-16 实测）：
+      预检失败有三种完全不同的原因，而【G2】断言看到连续 3 次 skipped
+      会报「额度长期枯竭，需要充值（E74）」——
+      **如果 529 上游过载也写成 quota，就会把「上游抖」误报成「该充值」**。
+      两种情况的处置完全不同：前者等 1-5 分钟，后者要牛哥哥掏钱。
+
+    → reason 必须**忠实反映预检说了什么**。
+    """
+    r = (reason or "").lower()
+    if "529" in r or "过载" in r or "繁忙" in r or "overload" in r:
+        return "upstream_busy"
+    if "普通限流" in r or "rate limit" in r or "限流" in r:
+        return "rate_limited"
+    if "额度" in r or "quota" in r or "token plan" in r:
+        return "quota"
+    return "unknown"
+
+
 def run_gate():
     """跑配额预检。返回 (是否放行, 说明文字)。"""
     if not PREFLIGHT.exists():
@@ -194,7 +215,15 @@ def main():
         # 闸门关闭：**故意以 exit 0 结束** ——
         # 这不是故障，是「今天额度不够，今天不学」。
         # 用 exit 1 会让 systemd 把它记成失败并可能触发告警（假警报）。
-        log("GATE_RESULT=skipped reason=quota")
+        # ⚠️ 2026-11-16 修正：reason **不能写死 quota**。
+        #   预检失败有多种原因（实测三种）：
+        #     · 额度耗尽（HTTP 429 + Token Plan）→ reason=quota
+        #     · 上游瞬时过载（HTTP 529 overloaded）→ reason=upstream_busy
+        #     · 普通限流（HTTP 429 但无额度特征）→ reason=rate_limited
+        #   写死成 quota 的话，**529 连续 3 次也会被报成「额度长期枯竭，需要充值」**
+        #   → 把「上游抖」误报成「牛哥哥该充值」= 假警报（E66）。
+        #   → reason 必须**忠实反映预检的结论**。
+        log(f"GATE_RESULT=skipped reason={_classify_reason(reason)}")
         return 0
 
     if args.check:

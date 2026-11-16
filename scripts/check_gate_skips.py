@@ -58,11 +58,27 @@ GATE_NAMES = ("daily-learning-gate", "daily-reflection-gate")
 #    2026-11-16 写第一版时用了 `^` + re.M → 故障注入时判据**装死**
 #    （注入 3 份 skipped 日志，判据仍报「尚未运行过」）→ 当场抓到。
 _RE_RESULT = re.compile(r"GATE_RESULT=(\S+)")
+# ⚠️ 2026-11-16 加：reason 也要抓出来。
+#   跳过有**三种原因**（quota / upstream_busy / rate_limited），
+#   处置完全不同：quota 要充值，upstream_busy 等 1-5 分钟就好。
+#   只看 result → 529 过载连续 3 次也会被报成「额度长期枯竭，需要充值」
+#   = 把「上游抖」误报成「牛哥哥该掏钱」（E66 假警报）。
+_RE_REASON = re.compile(r"reason=(\S+)")
 
 
 def parse_result(text: str) -> str | None:
     """从一份闸门日志里取 GATE_RESULT 的值；取不到返回 None。"""
     m = _RE_RESULT.search(text or "")
+    return m.group(1) if m else None
+
+
+def parse_reason(text: str) -> str | None:
+    """从一份闸门日志里取 reason=xxx 的值；取不到返回 None。
+
+    ⚠️ 老日志（本次修复之前写的）**没有**结构化 reason → 返回 None。
+    → 判据必须能处理 None（当成「原因未知」），不能崩，也不能当成 quota。
+    """
+    m = _RE_REASON.search(text or "")
     return m.group(1) if m else None
 
 
@@ -101,7 +117,7 @@ def collect_logs(log_dir: Path = LOG_DIR, names=GATE_NAMES, limit: int = MAX_LOG
         res = parse_result(text)
         if res is None:
             continue
-        out.append((gate, m.group(1), res))
+        out.append((gate, m.group(1), res, parse_reason(text)))
     out.sort(key=lambda x: x[1])  # 按时间升序
     return out[-limit:]
 
@@ -118,15 +134,20 @@ def judge(logs):
 
     # 按闸门名字分别统计「最近一段连续跳过」
     by_name: dict[str, list] = {}
-    for name, ts, res in logs:
-        by_name.setdefault(name, []).append((ts, res))
+    for row in logs:
+        name, ts, res = row[0], row[1], row[2]
+        reason = row[3] if len(row) > 3 else None
+        by_name.setdefault(name, []).append((ts, res, reason))
 
     for name, rows in sorted(by_name.items()):
         # 从最新往回数连续 skipped
         consecutive = 0
-        for _ts, res in reversed(rows):
+        reasons: list[str] = []
+        for _ts, res, reason in reversed(rows):
             if res == "skipped":
                 consecutive += 1
+                if reason:
+                    reasons.append(reason)
             else:
                 break
         detail[name] = {
@@ -134,17 +155,43 @@ def judge(logs):
             "consecutive_skipped": consecutive,
             "last_result": rows[-1][1],
             "last_ts": rows[-1][0],
+            "reasons": sorted(set(reasons)),
         }
+
+        # ⚠️ 2026-11-16：措辞必须**忠实反映跳过原因**。
+        #   三种原因的处置完全不同：
+        #     · quota         → 需要牛哥哥充值（长期枯竭）
+        #     · upstream_busy → 上游过载，等 1-5 分钟就恢复（不是充值问题）
+        #     · rate_limited  → 普通限流，等一会就好（不是充值问题）
+        #   全写成「额度不足 → 需要充值」= 把上游抖动误报成要掏钱（E66 假警报）。
+        #   → **全部是 quota** 才说「需要充值」；否则说「上游侧原因」。
+        # ⚠️ 老日志（修复前写的）没有结构化 reason → reasons 为空。
+        #   **不能**当成 quota（那是凭空指控「该充值」），也不能说成「上游侧」（那是凭空归因）。
+        #   → 老实说「原因未记录」。
+        uniq = sorted(set(reasons))
+        all_quota = bool(uniq) and all(r == "quota" for r in uniq)
+        any_quota = "quota" in uniq
         if consecutive >= FAIL_CONSECUTIVE:
+            if all_quota:
+                why = "额度长期枯竭，需要充值（E74）"
+            elif any_quota:
+                why = f"原因混合（额度 + 其他：{','.join(uniq)}），其中含额度不足（E74）"
+            elif not uniq:
+                why = ("跳过原因**未记录**（旧格式日志没有结构化 reason）"
+                       "→ 不能据此断言该充值，请先看预检结论（E74）")
+            elif uniq == ["unknown"]:
+                why = "跳过原因**未知**（reason=unknown）→ 先看预检结论，暂不判充值（E74）"
+            else:
+                why = (f"跳过原因**不是额度**（上游侧：{','.join(uniq)}）"
+                       "→ 不用充值，先看上游是否恢复（E74）")
             problems.append(
-                f"{name} 最近连续 {consecutive} 次被闸门跳过（额度不足）"
-                f"-- 最后一次 {rows[-1][0]}，已连续跳过 {consecutive} 次；"
-                f"额度长期枯竭，需要充值（E74）"
+                f"{name} 最近连续 {consecutive} 次被闸门跳过"
+                f"-- 最后一次 {rows[-1][0]}，已连续跳过 {consecutive} 次；{why}"
             )
         elif consecutive >= 1:
+            rs = ",".join(sorted(set(reasons))) if reasons else "未记录"
             warns.append(
-                f"{name} 最近一次被闸门跳过（额度不足），"
-                f"连续 {consecutive} 次"
+                f"{name} 最近一次被闸门跳过（原因 {rs}），连续 {consecutive} 次"
             )
 
     return problems, warns, detail
