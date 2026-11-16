@@ -67,6 +67,31 @@ _RE_RESULT = re.compile(r"GATE_RESULT=(\S+)")
 _RE_REASON = re.compile(r"reason=(\S+)")
 
 
+def _norm_ts(ts: str) -> str:
+    """把两种时间戳格式归一成**可比较**的同一形式。
+
+    ⚠️ 2026-11-16 实测 bug：两个数据源的 ts 格式**不同**：
+        日志文件名：  2026-11-16-174715      （'-' 分隔时分秒）
+        历史 jsonl：  2026-11-16T18:09:12    （'T' 分隔）
+    直接按字符串排序会**交错错位** ——
+    因为 ASCII 里 '-' (0x2D) < 'T' (0x54)，
+    所以 `2026-11-16-174715` 排在 `2026-11-16T09:00:00` **前面**，
+    而实际上 17:47 比 09:00 **晚**。
+    → 结果：「连续跳过」的计数建立在**错误的顺序**上，
+      一次真实的跳过可能被后面的成功记录「挤掉」→ **漏报**。
+
+    修法：统一转成 `YYYY-MM-DD-HHMMSS`（定长、可字典序比较）。
+    """
+    t = (ts or "").strip()
+    if not t:
+        return ""
+    t = t.replace("T", " ")
+    # 2026-11-16 18:09:12 → 2026-11-16-180912
+    t = t.replace(":", "").replace(" ", "-")
+    # 已经是 2026-11-16-174715 的形态则原样
+    return t
+
+
 def parse_result(text: str) -> str | None:
     """从一份闸门日志里取 GATE_RESULT 的值；取不到返回 None。"""
     m = _RE_RESULT.search(text or "")
@@ -118,8 +143,8 @@ def collect_logs(log_dir: Path = LOG_DIR, names=GATE_NAMES, limit: int = MAX_LOG
         res = parse_result(text)
         if res is None:
             continue
-        out.append((gate, m.group(1), res, parse_reason(text)))
-    out.sort(key=lambda x: x[1])  # 按时间升序
+        out.append((gate, _norm_ts(m.group(1)), res, parse_reason(text)))
+    out.sort(key=lambda x: x[1])  # 按时间升序（已归一化，可字典序比较）
     return out[-limit:]
 
 
@@ -156,7 +181,7 @@ def collect_history(path: Path = None, limit: int = 200):
                 continue
             # 闸门名统一成 daily-learning-gate / daily-reflection-gate
             gate = job if job.endswith("-gate") else f"{job}-gate"
-            out.append((gate, ts, res, r.get("reason") or ""))
+            out.append((gate, _norm_ts(ts), res, r.get("reason") or ""))
     except Exception:
         return out
     out.sort(key=lambda x: x[1])
@@ -367,11 +392,14 @@ if __name__ == "__main__":
     seen = set()
     merged = []
     for row in list(logs) + list(hist):
+        # ts 已由 collect_* 归一化成同一形式 → 字典序 == 时间序
         key = (row[0], row[1], row[2])
         if key in seen:
             continue
         seen.add(key)
         merged.append(row)
+    # ⚠️ 排序必须用**归一化后**的 ts —— 两个数据源原本格式不同，
+    #    直接字符串排序会交错错位（见 _norm_ts 的注释）。
     merged.sort(key=lambda x: x[1])
 
     problems, warns, detail = judge(merged)
