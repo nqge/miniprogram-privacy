@@ -77,6 +77,45 @@ def log(msg):
     print(f"[{JOB_NAME}-gate] {msg}", flush=True)
 
 
+# ── 持久化的闸门历史（2026-11-16 加）────────────────────────────────
+# 为什么需要它：闸门日志写在 `memory/healthcheck-logs/` 下，而那个目录
+# **在 .gitignore 里**（日志不是源码），并且 `run_logged.sh` 只保留 30 天。
+# → 后果：① 机器重建 → 闸门历史全丢；② 【G2】断言要「连续 3 次跳过」
+#   才报警，而 3 次 = 3 天 —— 期间任何一次清理/重建都会把信号抹掉。
+# → 所以另存一份**精简的结构化记录**：一行 JSON，只要日期 + result + reason。
+#   小、可进 git、能长期看趋势。
+GATE_HISTORY = WS / "memory" / "gate-history.jsonl"
+
+
+def record(result: str, reason: str = "", extra: dict | None = None):
+    """写一条闸门决策到 stdout **和** 持久化历史。
+
+    失败**不能影响闸门本身**（它只是记账，写不进去就跳过）——
+    闸门的主职责是「决定要不要启动 agent」，记账是次要的。
+    """
+    line = f"GATE_RESULT={result}"
+    if reason:
+        line += f" reason={reason}"
+    log(line)
+    try:
+        import datetime
+        rec = {
+            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+            "job": JOB_NAME,
+            "result": result,
+        }
+        if reason:
+            rec["reason"] = reason
+        if extra:
+            rec.update(extra)
+        GATE_HISTORY.parent.mkdir(parents=True, exist_ok=True)
+        with GATE_HISTORY.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        # 记账失败只提示，不影响闸门决策
+        print(f"[{JOB_NAME}-gate] ⚠️ 历史记录写入失败（不影响决策）: {e}", flush=True)
+
+
 def find_job_id():
     """按名字找 job id（不写死 id —— id 会变）。
 
@@ -168,7 +207,7 @@ def run_gate():
     reason = concl or "额度不足"
     log(f"🚫 额度预检未通过 → 闸门关闭（{reason}）")
     # 放行判断写在最后一行，方便被外部脚本 grep
-    log(f"GATE_RESULT=blocked reason={reason}")
+    record("blocked", reason)
     return False, reason
 
 
@@ -186,7 +225,7 @@ def trigger(job_id):
     tail = (r.stdout or "").strip().splitlines()[-3:]
     for t in tail:
         log(f"  | {t}")
-    log(f"GATE_RESULT=triggered rc={r.returncode}")
+    record("triggered", extra={"rc": r.returncode})
     return r.returncode == 0
 
 
@@ -202,7 +241,7 @@ def main():
     JOB_NAME = args.job
     job_id = find_job_id()
     if not job_id:
-        log("GATE_RESULT=error reason=cron_job_not_found")
+        record("error", "cron_job_not_found")
         return 2
 
     if args.force:
@@ -223,11 +262,11 @@ def main():
         #   写死成 quota 的话，**529 连续 3 次也会被报成「额度长期枯竭，需要充值」**
         #   → 把「上游抖」误报成「牛哥哥该充值」= 假警报（E66）。
         #   → reason 必须**忠实反映预检的结论**。
-        log(f"GATE_RESULT=skipped reason={_classify_reason(reason)}")
+        record("skipped", _classify_reason(reason))
         return 0
 
     if args.check:
-        log("GATE_RESULT=ok reason=gate_passed (check-only)")
+        record("ok", "gate_passed", extra={"check_only": True})
         return 0
 
     trigger(job_id)

@@ -39,6 +39,7 @@ E71 是「连续失败被判成 WARN」，本条是「**连续跳过连日志都
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -119,6 +120,46 @@ def collect_logs(log_dir: Path = LOG_DIR, names=GATE_NAMES, limit: int = MAX_LOG
             continue
         out.append((gate, m.group(1), res, parse_reason(text)))
     out.sort(key=lambda x: x[1])  # 按时间升序
+    return out[-limit:]
+
+
+def collect_history(path: Path = None, limit: int = 200):
+    """读持久化的闸门历史 `memory/gate-history.jsonl`。
+
+    为什么要有这个：闸门日志在 `memory/healthcheck-logs/` 下，
+    那个目录**在 .gitignore 里**（日志不是源码）且只保留 30 天
+    → 机器重建或清理会把闸门历史抹掉，而【G2】要「连续 3 次跳过」才报警
+    → 3 次 = 3 天，期间丢一次就再也攒不出来。
+
+    → 闸门另存一份精简的结构化记录（日期 + result + reason），可进 git。
+
+    返回 [(闸门名, ts字符串, result, reason), ...]，按时间升序。
+    """
+    if path is None:
+        path = Path("/root/.openclaw/workspace/memory/gate-history.jsonl")
+    out = []
+    if not path.exists():
+        return out
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            job = r.get("job")
+            res = r.get("result")
+            ts = r.get("ts") or ""
+            if not job or not res or not ts:
+                continue
+            # 闸门名统一成 daily-learning-gate / daily-reflection-gate
+            gate = job if job.endswith("-gate") else f"{job}-gate"
+            out.append((gate, ts, res, r.get("reason") or ""))
+    except Exception:
+        return out
+    out.sort(key=lambda x: x[1])
     return out[-limit:]
 
 
@@ -285,6 +326,31 @@ def self_test() -> int:
         assert not pp, pp
         assert ww, "2 次跳过应给 WARN"
 
+    # 10) 持久化历史：能读出来 + 名字归一 + 坏行不炸
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        hp = Path(td) / "gate-history.jsonl"
+        hp.write_text(
+            '{"ts": "2026-11-16T09:00:00", "job": "daily-learning", "result": "skipped", "reason": "quota"}\n'
+            '{"ts": "2026-11-17T09:00:00", "job": "daily-learning", "result": "skipped", "reason": "quota"}\n'
+            '{"ts": "2026-11-18T09:00:00", "job": "daily-learning", "result": "skipped", "reason": "quota"}\n'
+            '这行是坏的\n'
+            '{"ts": "2026-11-19T09:00:00", "job": "daily-reflection", "result": "triggered"}\n',
+            encoding="utf-8")
+        h = collect_history(path=hp)
+        assert len(h) == 4, f"坏行应被跳过，应读到 4 条，实际 {len(h)}"
+        assert h[0][0] == "daily-learning-gate", h[0]
+        assert h[0][2] == "skipped" and h[0][3] == "quota", h[0]
+        assert h[3][0] == "daily-reflection-gate", h[3]
+        assert h[3][3] == "", h[3]
+        # 连续 3 次跳过 → FAIL（和日志来源同口径）
+        pp, ww, dd = judge(h)
+        assert pp, "历史里的连续 3 次跳过也必须被认出来"
+        assert dd["daily-learning-gate"]["consecutive_skipped"] == 3, dd
+
+    # 11) 不存在的历史文件不炸
+    assert collect_history(path=Path("/nonexistent/gate-history.jsonl")) == []
+
     print("【G】闸门跳过判据自检: ✅ 全部通过")
     return 0
 
@@ -293,14 +359,30 @@ if __name__ == "__main__":
     if "--self-test" in sys.argv:
         raise SystemExit(self_test())
     logs = collect_logs()
-    problems, warns, detail = judge(logs)
+    # 合并**持久化历史**（memory/gate-history.jsonl）：
+    #   日志目录在 .gitignore 里 + 只留 30 天 → 机器重建/清理会丢历史，
+    #   而「连续 3 次跳过」= 3 天，丢一次就再也攒不出来。
+    #   → 两个来源**合并去重**（按 闸门名+ts+result）后一起判。
+    hist = collect_history()
+    seen = set()
+    merged = []
+    for row in list(logs) + list(hist):
+        key = (row[0], row[1], row[2])
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    merged.sort(key=lambda x: x[1])
+
+    problems, warns, detail = judge(merged)
     for p in problems:
         print(f"FAIL {p}")
     for w in warns:
         print(f"WARN {w}")
     if not problems and not warns:
-        if logs:
-            print(f"PASS 闸门最近 {len(logs)} 次运行无连续跳过（额度正常）")
+        if merged:
+            src = f"（{len(logs)} 条日志 + {len(hist)} 条历史）"
+            print(f"PASS 闸门最近 {len(merged)} 次运行无连续跳过{src}（额度正常）")
         else:
             print("PASS 闸门尚未运行过（无日志），无可判定内容")
     print(f"__G_FAILED__={1 if problems else 0}")
