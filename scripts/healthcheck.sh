@@ -1261,11 +1261,28 @@ except Exception:
     pass
 
 # 2) cron 任务列表与真实一致
+#
+# ⚠️ 2026-11-16 修正（实测误报）：原来用 `openclaw cron list --json` 取真实任务名，
+#    但 **`cron list` 不列出已禁用的任务**。
+#    而「已禁用 + 由 systemd 触发」是一种**刻意**的架构
+#    （2026-11-16 起 daily-learning 改成 systemd 闸门触发：
+#     cron 里 disabled，只作为被触发的目标；调度归 systemd）——
+#    → 声明文档里列着它，但它不在 `cron list` 里 → 被判成「列了不存在的任务」。
+#
+#    修法：**直接读 cron 的任务存储**（同一份数据源，只是不按 enabled 过滤）。
+#    读不到再回退到 `cron list`。
 try:
-    r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
-                       capture_output=True, text=True, timeout=60)
-    jobs, _ = json.JSONDecoder().raw_decode(r.stdout[r.stdout.find('['):])
-    real_names = {j['name'] for j in jobs}
+    real_names = set()
+    try:
+        with open('/root/.openclaw/cron/jobs.json', encoding='utf-8') as _f:
+            _d = json.load(_f)
+        _jobs = _d if isinstance(_d, list) else _d.get('jobs', _d.get('data', []))
+        real_names = {j.get('name') for j in _jobs if j.get('name')}
+    except Exception:
+        r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
+                           capture_output=True, text=True, timeout=60)
+        jobs, _ = json.JSONDecoder().raw_decode(r.stdout[r.stdout.find('['):])
+        real_names = {j['name'] for j in jobs}
     # 分隔符可能是半角连字符、半角/全角破折号 —— 都要认。
     # （2026-10-27 实测踩过：生成器用 em-dash「—」，断言写的是「-」，
     #  → 声明列表解析成空 → 报「漏了全部 cron 任务」，纯属误报）
