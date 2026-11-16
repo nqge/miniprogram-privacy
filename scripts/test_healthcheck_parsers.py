@@ -23,6 +23,7 @@
 退出码 0 = 全通过
 """
 import glob
+import json
 import os
 import re
 import sys
@@ -79,6 +80,33 @@ def main():
         sec = state[i:j]
         decl = set(re.findall(r'^- `([a-z0-9-]+)`\s*[\-\u2014\u2013]+\s*', sec, re.M))
         cases.append((len(decl) > 0, f'【S】cron 任务声明列表能解析（{len(decl)} 个）'))
+
+        # ⚠️ 2026-11-16 加（回归防护）：
+        #   「生成器」和「【S】断言」必须用**同一个数据源**，否则两边结论必然打架。
+        #   真实翻车：生成器读 `openclaw cron list`（两个任务 disabled 后返回**空**）
+        #   而【S】断言读 `cron/jobs.json`（仍有 2 个）
+        #   → 生成器渲染出空列表 → 【S】报「漏了 cron 任务 [daily-learning, daily-reflection]」
+        #   → 连带【X】解析器自检 FAIL（它断言声明列表非空）。
+        #   修法：生成器改读 `cron/jobs.json`。
+        #   本用例断言：**生成器读出来的任务集合 == jobs.json 里的任务集合**，
+        #   且 **disabled 的任务也要列出来**（它们是闸门的触发目标，藏起来会误导下个会话）。
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                'gen_ss', os.path.join(WS, 'scripts', 'gen_system_status.py'))
+            g = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(g)
+            gen_jobs = {j.get('name') for j in g.read_jobs() if j.get('name')}
+            with open('/root/.openclaw/cron/jobs.json', encoding='utf-8') as f:
+                _d = json.load(f)
+            real = {j.get('name') for j in (_d if isinstance(_d, list) else _d.get('jobs', [])) if j.get('name')}
+            same = gen_jobs == real
+            cases.append((same, f'【S】生成器与断言同源（jobs.json {sorted(real)} vs 生成器 {sorted(gen_jobs)}）'))
+            missing_disabled = real - decl
+            cases.append((not missing_disabled,
+                          f'【S】disabled 的任务也列在状态里（缺 {sorted(missing_disabled)}）'))
+        except Exception as e:
+            cases.append((False, f'【S】生成器同源检查异常：{e}'))
 
     # 【Q】cron 指令里的组数清单
     # ⚠️ 清单在 **cron 指令**里（不在 SESSION-STATE.md）——

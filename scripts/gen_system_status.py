@@ -55,11 +55,24 @@ def read_agent_catalog():
 
 
 def read_jobs():
-    r = subprocess.run(['openclaw', 'cron', 'list', '--json'],
-                       capture_output=True, text=True, timeout=60)
+    """读 cron 任务 —— 数据源是 `cron/jobs.json`（**不是** `openclaw cron list`）。
+
+    ⚠️ 2026-11-16 修正：原来读 `openclaw cron list --json`，
+    而 11-16 那轮把 daily-learning / daily-reflection 改成 **disabled**
+    （改由 systemd 闸门触发）→ `cron list` 返回**空列表** →
+    本节渲染出空的「**cron 任务**:」→ 【S】组断言（读的是 jobs.json）
+    立刻报「漏了 cron 任务 [daily-learning, daily-reflection]」。
+
+    → **根因是两个组件对「有哪些任务」用了不同的数据源**，
+      一个看「当前启用的」，一个看「存在的」→ 结论必然打架。
+    → 统一到 `cron/jobs.json`（**真实存储**），并**把 disabled 的也列出来** ——
+      它们仍然是闸门要触发的目标，藏起来会让下一个会话以为这俩没人管了。
+    """
     try:
-        jobs, _ = json.JSONDecoder().raw_decode(r.stdout[r.stdout.find('['):])
-        return jobs
+        p = '/root/.openclaw/cron/jobs.json'
+        d = json.load(open(p, encoding='utf-8'))
+        jobs = d if isinstance(d, list) else d.get('jobs', d.get('data', []))
+        return jobs or []
     except Exception:
         return []
 
@@ -120,8 +133,12 @@ def build():
         expr = sch.get('expr') or sch.get('at') or ''
         last = st.get('lastRunStatus', '?')
         dur = (st.get('lastDurationMs') or 0) / 1000
+        # 标注 disabled —— 它们由 systemd 闸门触发，不再自触发（2026-11-16 架构）
+        # ⚠️ enabled 字段在 **job 顶层**（"enabled": false），不在 state 里
+        disabled = j.get('enabled') is False or st.get('enabled') is False
+        tag = ' · **disabled（由 systemd 闸门触发）**' if disabled else ''
         L.append(f'- `{j["name"]}` — {sch.get("kind", "")} {expr} · '
-                 f'timeout {p.get("timeoutSeconds")}s · last: {last} ({dur:.0f}s)')
+                 f'timeout {p.get("timeoutSeconds")}s · last: {last} ({dur:.0f}s){tag}')
     L.append('')
     L.append('**systemd timers（纯脚本任务，不消耗模型额度）**:')
     for line in read_timers():
