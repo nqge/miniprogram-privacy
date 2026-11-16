@@ -69,6 +69,10 @@ UNITS = {
         "enabled": True,
         "checks": [],
     },
+    "openclaw-daily-learning.timer": {
+        "enabled": True,
+        "checks": [],
+    },
     "openclaw-healthcheck.service": {
         "enabled": False,  # 由 timer 触发
         "checks": [
@@ -85,6 +89,13 @@ UNITS = {
         "enabled": False,
         "checks": [
             ("ExecStart", "run_logged.sh teahouse-monitor", "茶馆监控执行入口"),
+        ],
+    },
+    # 2026-11-16 新增：额度闸门
+    "openclaw-daily-learning.service": {
+        "enabled": False,  # 由 timer 触发
+        "checks": [
+            ("ExecStart", "run_logged.sh daily-learning-gate", "每日学习闸门执行入口"),
         ],
     },
 }
@@ -113,6 +124,13 @@ TIMERS = {
     ],
     "openclaw-teahouse-monitor.timer": [
         ("TimersCalendar", "OnCalendar", "每 4 小时"),
+        ("Persistent", None, "关机/休眠错过的会补跑"),
+    ],
+    # 2026-11-16 新增：daily-learning 的**额度闸门** timer。
+    # 它跑的是纯脚本闸门（额度够才触发 agentTurn），不烧模型额度 ——
+    # 所以「额度耗尽」这个故障不会影响闸门本身（这正是不变量）。
+    "openclaw-daily-learning.timer": [
+        ("TimersCalendar", "OnCalendar", "每日 09:00"),
         ("Persistent", None, "关机/休眠错过的会补跑"),
     ],
 }
