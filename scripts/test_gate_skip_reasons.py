@@ -120,6 +120,84 @@ check("skipped", cgs.parse_result("GATE_RESULT=skipped reason=quota") == "skippe
 check("ok", cgs.parse_result("GATE_RESULT=ok reason=gate_passed") == "ok")
 check("无内容 → None", cgs.parse_result("nothing here") is None)
 
+# ---------------------------------------------------------------- ⑧
+print("\n【⑧】判据侧与闸门侧的分类规则必须一致")
+# ⚠️ 2026-11-17 实测：旧历史里 blocked 记录的 reason 是**原始预检文本**，
+#   判据侧要把它归一成结构化标签。如果两侧规则不一样 →
+#   「旧记录说 upstream_busy、判据说 quota」→ 措辞自相矛盾。
+_raw_samples = [
+    "结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通",
+    "HTTP 529 overloaded",
+    "已达到 Token Plan 用量上限",
+    "普通限流，等 1-2 分钟",
+    "",
+]
+for _r in _raw_samples:
+    _a = cgs._classify_reason_text(_r)
+    _b = gate._classify_reason(_r)
+    check(f"两侧对 {_r[:26]!r} 分类一致（{_a}）",
+          _a == _b, f"判据侧={_a} 闸门侧={_b}")
+
+# 已结构化的标签要原样保留
+for _t in ("quota", "upstream_busy", "rate_limited"):
+    check(f"结构化标签 {_t} 原样保留",
+          cgs._classify_reason_text(_t) == _t, cgs._classify_reason_text(_t))
+
+# ---------------------------------------------------------------- ⑨
+print("\n【⑨】旧版双记录（blocked+skipped 同 ts）不能被数成两次")
+_rows = [
+    ("daily-learning-gate", "2026-11-17-090032", "blocked", "结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通"),
+    ("daily-learning-gate", "2026-11-17-090152", "skipped", "upstream_busy"),
+    ("daily-learning-gate", "2026-11-17-092039", "blocked", "结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通"),
+    ("daily-learning-gate", "2026-11-17-092039", "skipped", "upstream_busy"),
+    ("daily-learning-gate", "2026-11-17-093831", "triggered", ""),
+]
+_p, _w, _d = cgs.judge(_rows)
+check("blocked 归一化为 skipped 后算成连续",
+      _d.get("daily-learning-gate", {}).get("best_streak", 0) >= 2, _d)
+check("消息里出现 upstream_busy",
+      bool(_p) and "upstream_busy" in _p[0], _p[0] if _p else "")
+check("消息**不含**原始预检文本",
+      bool(_p) and "结论：" not in _p[0], _p[0] if _p else "")
+
+print("\n" + "=" * 60)
+print(f" 结果: PASS={PASS} FAIL={FAIL}")
+print("=" * 60)
+if FAIL:
+    raise SystemExit(1)
+
+# ---------------------------------------------------------------- ⑩
+print("\n【⑩】上游原因的消息必须能被 healthcheck 归进「等你」（别当假警报）")
+# ⚠️ 2026-11-17 实测踩到：消息里既不含「Token Plan」也不含「额度耗尽」
+#   → healthcheck 的 is_waiting() 认不出来 → 被归进「**可处理 - 现在就该修**」
+#   → 但上游过载**谁都不用做什么**（1-5 分钟自己好），而且已经恢复了
+#   → 长期性假警报。
+#   → 修法：措辞里明确写「**无需处理**」，并让 WAITING_PATTERNS 认这个词。
+_rows_busy = [
+    ("daily-learning-gate", "2026-11-17-090152", "skipped", "upstream_busy"),
+    ("daily-learning-gate", "2026-11-17-092039", "skipped", "upstream_busy"),
+    ("daily-learning-gate", "2026-11-17-092823", "skipped", "upstream_busy"),
+    ("daily-learning-gate", "2026-11-17-093831", "triggered", ""),
+]
+_p2, _w2, _d2 = cgs.judge(_rows_busy)
+check("上游原因连跳 3 次 → 有 FAIL", bool(_p2), _p2)
+_msg = _p2[0] if _p2 else ""
+check("消息含「无需处理」（让 is_waiting 认得出来）", "无需处理" in _msg, _msg)
+check("消息不含「需要充值」", "需要充值" not in _msg, _msg)
+
+# 额度原因**不能**说「无需处理」（那是反过来的错）
+_rows_quota = [
+    ("daily-learning-gate", "2026-11-17-090152", "skipped", "quota"),
+    ("daily-learning-gate", "2026-11-17-092039", "skipped", "quota"),
+    ("daily-learning-gate", "2026-11-17-092823", "skipped", "quota"),
+    ("daily-learning-gate", "2026-11-17-093831", "triggered", ""),
+]
+_p3, _w3, _d3 = cgs.judge(_rows_quota)
+check("额度原因连跳 3 次 → 有 FAIL", bool(_p3), _p3)
+_msg3 = _p3[0] if _p3 else ""
+check("额度原因的消息说「需要充值」", "需要充值" in _msg3, _msg3)
+check("额度原因的消息**不含**「无需处理」", "无需处理" not in _msg3, _msg3)
+
 print()
 print("=" * 60)
 print(f" 结果: PASS={PASS} FAIL={FAIL}")

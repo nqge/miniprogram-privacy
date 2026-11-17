@@ -79,6 +79,25 @@ PREFLIGHT = WS / "scripts" / "quota_preflight.py"
 # 当前生效的任务名（由 main() 从 --job 设置；模块级默认值保证函数可单测）
 JOB_NAME = DEFAULT_JOB
 
+# 本次闸门决策的**开始时刻**（进程启动时间）。
+#
+# ⚠️ 为什么要单独记：历史记录的时间戳必须和**日志文件名**同基准，
+#   否则同一个决策会在两个数据源里呈现为**两个不同的时刻**，
+#   去重不掉 → 「连续跳过」被**重复计数**。
+#     · 日志文件名 = **进程启动**时刻（run_logged.sh 的 `date +%F-%H%M%S`）
+#     · 若历史用「写入时刻」→ 预检跑了 ~80s，两者差 80 秒 → 对不上
+#   → 所以统一用**启动时刻**，两个源才能对上。
+#   （实测 2026-11-17：日志 09:00:32 vs 历史 09:01:52 = 同一个决策被数成两次）
+_START_TS = None
+
+
+def _start_ts():
+    global _START_TS
+    if _START_TS is None:
+        import datetime
+        _START_TS = datetime.datetime.now()
+    return _START_TS
+
 
 def log(msg):
     print(f"[{JOB_NAME}-gate] {msg}", flush=True)
@@ -106,8 +125,11 @@ def record(result: str, reason: str = "", extra: dict | None = None):
     log(line)
     try:
         import datetime
+        st = _start_ts()
         rec = {
-            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+            # 用**启动时刻**（与日志文件名同基准），不是写入时刻
+            "ts": st.isoformat(timespec="seconds"),
+            "ts_end": datetime.datetime.now().isoformat(timespec="seconds"),
             "job": JOB_NAME,
             "result": result,
         }
@@ -213,8 +235,14 @@ def run_gate():
             break
     reason = concl or "额度不足"
     log(f"🚫 额度预检未通过 → 闸门关闭（{reason}）")
-    # 放行判断写在最后一行，方便被外部脚本 grep
-    record("blocked", reason)
+    # ⚠️ 2026-11-17 修正：**这里不写历史记录**。
+    #   原先这里 record("blocked", reason) + 调用方 record("skipped", ...)
+    #   → **一次闸门决策写了两条记录**（同一时间戳）。
+    #   后果（今天早上实测踩到）：序列变成
+    #     skipped, blocked, skipped, blocked, skipped, blocked
+    #   → 【G2】断言数「连续跳过」时，**blocked 把 streak 打断了**
+    #   → 真实的 3 次连续跳过被算成 1 次 → **漏报**。
+    #   → 一次决策 = 一条记录，由**调用方**统一写（它才知道分类后的 reason）。
     return False, reason
 
 

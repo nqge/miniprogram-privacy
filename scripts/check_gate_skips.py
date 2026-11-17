@@ -92,6 +92,50 @@ def _norm_ts(ts: str) -> str:
     return t
 
 
+# 结构化 reason 标签（与闸门侧 daily_learning_gate._classify_reason 同规则）
+_STRUCTURED_REASONS = ("quota", "upstream_busy", "rate_limited", "unknown")
+
+
+def _classify_reason_text(reason: str) -> str:
+    """把原始预检结论文本归一成结构化 reason 标签。
+
+    ⚠️ 规则**必须和闸门侧一致**（daily_learning_gate._classify_reason），
+    否则「旧记录说 upstream_busy、判据说 quota」→ 措辞自相矛盾。
+    → 这里不 import 闸门模块（判据要能独立跑），而是**复制同一套规则**，
+      并用单测断言两者一致（见 test_gate_skip_reasons.py）。
+    """
+    r = (reason or "").strip()
+    if not r:
+        # 与闸门侧一致：空 reason → "unknown"（**不是** quota）
+        # ⚠️ 空 reason 绝不能当成 quota —— 那是凭空指控「该充值」（E74/E66）
+        return "unknown"
+    if r in _STRUCTURED_REASONS:
+        return r
+    low = r.lower()
+    if "529" in low or "过载" in low or "繁忙" in low or "overload" in low:
+        return "upstream_busy"
+    if "普通限流" in low or "rate limit" in low or "限流" in low:
+        return "rate_limited"
+    if "额度" in low or "quota" in low or "token plan" in low:
+        return "quota"
+    return "unknown"
+
+
+def _ts_to_epoch(ts: str):
+    """把归一化后的 ts（YYYY-MM-DD-HHMMSS）转成 epoch 秒；失败返回 None。
+
+    用于跨源去重时比较「两条记录是不是同一次决策」。
+    """
+    t = (ts or "").strip()
+    if len(t) != 17:      # len("2026-11-16-090000")
+        return None
+    try:
+        import datetime
+        return datetime.datetime.strptime(t, "%Y-%m-%d-%H%M%S").timestamp()
+    except Exception:
+        return None
+
+
 def parse_result(text: str) -> str | None:
     """从一份闸门日志里取 GATE_RESULT 的值；取不到返回 None。"""
     m = _RE_RESULT.search(text or "")
@@ -206,6 +250,41 @@ def judge(logs):
         by_name.setdefault(name, []).append((ts, res, reason))
 
     for name, rows in sorted(by_name.items()):
+        # ⚠️ 2026-11-17 修正：**同一次闸门决策可能留下两条记录**
+        #   （旧版闸门一次失败会写 `blocked` + `skipped` 两条，时间戳相同）。
+        #   → 序列变成 skipped, blocked, skipped, blocked, ...
+        #   → 「连续跳过」被 blocked 打断 → 真实的 3 次连跳被算成 1 次 → **漏报**。
+        #   → 判据层也要能读**历史遗留**的旧记录：
+        #     把 `blocked` 归一化成 `skipped`（两者都表示「闸门没让 agentTurn 跑」）。
+        #     闸门侧已改成「一次决策一条记录」，但旧历史还在，归一化让两者都算对。
+        # rows 里每条是 (ts, res, reason)
+        #
+        # 归一化 + **去重**：
+        #   旧版闸门一次失败写两条（同时间戳）：
+        #     blocked (原始预检文本) + skipped (分类后的 reason)
+        #   两者都表示「闸门没让 agentTurn 跑」→ 都算 skipped，
+        #   但**同一次决策只能算一次** → 同时间戳的重复要合并。
+        #   合并时**优先保留 skipped 那条**（它的 reason 是分类过的，
+        #   比 blocked 的原始预检文本干净 —— 原始文本会污染措辞）。
+        _by_ts: dict = {}
+        _order: list = []
+        for (ts, res, reason) in rows:
+            if res == "blocked":
+                res = "skipped"
+                # 旧版 blocked 记录里的 reason 是**原始预检结论文本**
+                # （如「结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通」），
+                # 措辞很脏。→ 用**同一套分类规则**归一成结构化标签。
+                reason = _classify_reason_text(reason)
+            if ts in _by_ts:
+                # 同时间戳已有一条 → 合并（保留有 reason 的那条）
+                prev_res, prev_reason = _by_ts[ts]
+                if not prev_reason and reason:
+                    _by_ts[ts] = (res, reason)
+                continue
+            _by_ts[ts] = (res, reason)
+            _order.append(ts)
+        rows = [(ts, _by_ts[ts][0], _by_ts[ts][1]) for ts in _order]
+
         # 从最新往回数连续 skipped（**当前**还在跳的这段）
         consecutive = 0
         reasons: list[str] = []
@@ -285,8 +364,16 @@ def judge(logs):
             elif uniq == ["unknown"]:
                 why = "跳过原因**未知**（reason=unknown）→ 先看预检结论，暂不判充值（E74）"
             else:
+                # ⚠️ 措辞要**自证分类**（2026-11-17 实测踩到）：
+                #   这条 FAIL 会被 healthcheck 的 is_waiting() 分栏。
+                #   原来只写「不用充值，先看上游是否恢复」→
+                #   既不含「Token Plan」也不含「额度耗尽」→ 被归进「**可处理**」→
+                #   但上游过载**谁都不用做什么**（等 1-5 分钟就好，而且已经恢复了）→
+                #   → 长期性假警报。
+                #   → 明确写「**无需处理**」，并让 is_waiting() 能认出来。
                 why = (f"跳过原因**不是额度**（上游侧：{','.join(uniq)}）"
-                       "→ 不用充值，先看上游是否恢复（E74）")
+                       "→ 不用充值，先看上游是否恢复（E74）"
+                       "；**上游瞬时过载，无需处理**，等上游恢复即可")
             if recovered:
                 # 措辞要区分：**已经恢复了**，但历史里有一段连续跳过
                 problems.append(
@@ -479,15 +566,62 @@ if __name__ == "__main__":
     #   而「连续 3 次跳过」= 3 天，丢一次就再也攒不出来。
     #   → 两个来源**合并去重**（按 闸门名+ts+result）后一起判。
     hist = collect_history()
-    seen = set()
-    merged = []
+    # 去重 key = (闸门名, 归一化后的 ts)
+    # ⚠️ **不带 result** —— 同一个决策可能在两个源里各留一条
+    #   （旧版闸门一次失败写 blocked + skipped 两条）。
+    #   → 只按 (name, ts) 去重，才不会把**一次决策数成两次**。
+    #   → 合并时优先保留 reason 更「干净」的那条（skipped 的分类 reason，
+    #     比 blocked 的原始预检文本好用）。
+    _by_key: dict = {}
+    _order: list = []
     for row in list(logs) + list(hist):
-        # ts 已由 collect_* 归一化成同一形式 → 字典序 == 时间序
-        key = (row[0], row[1], row[2])
-        if key in seen:
+        key = (row[0], row[1])
+        reason = row[3] if len(row) > 3 else None
+        if key in _by_key:
+            prev = _by_key[key]
+            # 优先保留「有 reason 且 reason 不是原始预检文本」的那条
+            if not prev[3] and reason:
+                _by_key[key] = (prev[0], prev[1], prev[2], reason)
             continue
-        seen.add(key)
-        merged.append(row)
+        _by_key[key] = (row[0], row[1], row[2], reason)
+        _order.append(key)
+    merged = [_by_key[k] for k in _order]
+
+    # ⚠️ 2026-11-17：**跨源**的同一决策去重（旧历史遗留）。
+    #   旧版闸门的历史记录用「**写入时刻**」，日志文件名用「**启动时刻**」，
+    #   预检跑 ~80s → 同一个决策在两个源里差 ~80 秒 → 上面按 ts 去重**去不掉**
+    #   → 一次决策被数成两次（今天实测：日志 09:00:32 vs 历史 09:01:52）。
+    #   → 闸门侧已改成统一用启动时刻；但**旧记录还在**，
+    #     所以判据侧再加一层：**同一闸门、同一「未放行」结果、且相隔 < 5 分钟**
+    #     的两条记录 → 判为同一次决策，合并。
+    #     （5 分钟：够覆盖一次预检的耗时，又不至于把连续几天的跳过误合并）
+    _DEDUP_WINDOW_SEC = 300
+    _merged2: list = []
+    for row in merged:
+        g, ts, res, reason = row[0], row[1], row[2], (row[3] if len(row) > 3 else None)
+        folded = False
+        for i, prev in enumerate(_merged2):
+            if prev[0] != g or prev[2] != res:
+                continue
+            # 前一条也是「未放行」类结果才需要合并
+            if prev[2] not in ("skipped", "blocked", "error"):
+                continue
+            try:
+                a = _ts_to_epoch(prev[1])
+                b = _ts_to_epoch(ts)
+            except Exception:
+                continue
+            if a is None or b is None:
+                continue
+            if abs(b - a) <= _DEDUP_WINDOW_SEC:
+                # 合并：保留 reason 更干净的那条
+                if not prev[3] and reason:
+                    _merged2[i] = (g, prev[1], prev[2], reason)
+                folded = True
+                break
+        if not folded:
+            _merged2.append((g, ts, res, reason))
+    merged = _merged2
     # ⚠️ 排序必须用**归一化后**的 ts —— 两个数据源原本格式不同，
     #    直接字符串排序会交错错位（见 _norm_ts 的注释）。
     merged.sort(key=lambda x: x[1])
