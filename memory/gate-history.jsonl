@@ -1,1 +1,5 @@
 {"ts": "2026-11-16T18:09:12", "job": "daily-learning", "result": "ok", "reason": "gate_passed", "check_only": true}
+{"ts": "2026-11-17T09:01:52", "job": "daily-learning", "result": "blocked", "reason": "结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通"}
+{"ts": "2026-11-17T09:01:52", "job": "daily-learning", "result": "skipped", "reason": "upstream_busy"}
+{"ts": "2026-11-17T09:20:39", "job": "daily-learning", "result": "blocked", "reason": "结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通"}
+{"ts": "2026-11-17T09:20:39", "job": "daily-learning", "result": "skipped", "reason": "upstream_busy"}
