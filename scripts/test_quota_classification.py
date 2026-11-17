@@ -288,6 +288,102 @@ def test_provider_health_classification():
     )
 
 
+def test_overload_529_classification():
+    """2026-11-17 新增：上游瞬时过载（HTTP 529）必须与「额度耗尽」**分开处置**。
+
+    真实故障（quick-health 16:07 实录）：
+        ⚠️  WARN  minimax 服务端错误（HTTP 529）{"type":"error","error":{"type":"overloaded_error",...}}
+        ❌ FAIL  **没有任何可用 provider** —— 整个系统无法推理
+        ❌ FAIL  provider 检查未通过（详见上方）
+        → 结果: PASS=8  FAIL=3  (可处理 2 / 等用户 1)
+
+    **问题**：529 不是额度、不是配置坏了、也不是真故障 ——
+    上游集群过载，**谁都不用做什么**（等 1-5 分钟自愈，直连实测 1.5s 就恢复）。
+    但旧措辞「整个系统无法推理」不含任何「等待」特征 → 被归「**可处理**」
+    → **长期性假警报**（E69 的同源问题：信号在 WARN 那行，被分类的是另一条 FAIL）。
+
+    与「额度耗尽」的处置**完全不同**：
+      · 额度 → 要牛哥哥充值（长期项）
+      · 529  → **什么都不用做**（等几分钟就行）
+    → 两者都应归「等你/长期项」，但**措辞必须能让人一眼分清该做什么**。
+    """
+    print("【7】上游瞬时过载（HTTP 529）的分类")
+    cph_src = (WS / "scripts" / "check_provider_health.py").read_text(encoding="utf-8")
+    qh_src = (WS / "scripts" / "quick_health.py").read_text(encoding="utf-8")
+
+    # ① 探针必须单独识别 529（不能混进「服务端错误」通用分支）
+    check("探针有 529 专用分支", "code == 529" in cph_src,
+          "529 要有自己的措辞，不能只是「服务端错误」")
+
+    # ② 529 的措辞必须带「无需处理」—— 让下游分类器认得出
+    check("529 措辞含「无需处理」", "无需处理" in cph_src,
+          "上游过载谁都不用做什么 → 必须能被判成长期项")
+
+    # ③ WAITING_ON_USER 必须认得这两种措辞
+    check("WAITING_ON_USER 含「上游瞬时过载」", "上游瞬时过载" in qh_src)
+    check("WAITING_ON_USER 含「无需处理」", '"无需处理"' in qh_src)
+
+    # ④ **故障注入**：跑真身 probe()，用假 HTTPError 造 529
+    import importlib.util
+    import urllib.error
+
+    spec = importlib.util.spec_from_file_location(
+        "cph529", WS / "scripts" / "check_provider_health.py")
+    cph529 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cph529)
+
+    class FakeHTTPError(urllib.error.HTTPError):
+        def __init__(self, code, body):
+            super().__init__("http://x", code, "err", {}, None)
+            self._body = body.encode()
+        def read(self):
+            return self._body
+
+    orig_urlopen = cph529.urllib.request.urlopen
+
+    def make_raise(code, body):
+        def _f(req, timeout=None):
+            raise FakeHTTPError(code, body)
+        return _f
+
+    # 529 → warn + 带「无需处理」
+    cph529.urllib.request.urlopen = make_raise(
+        529, '{"type":"error","error":{"type":"overloaded_error","message":"overloaded_error (529)"}}')
+    st, detail = cph529.probe("minimax", {"baseUrl": "http://x", "apiKey": "k",
+                                           "models": [{"id": "m"}]})
+    check(f"真身 probe(): 529 → 状态 warn（实得 {st}）", st == "warn")
+    check("真身 probe(): 529 措辞含「无需处理」", "无需处理" in detail)
+    check("真身 probe(): 529 措辞含「529」", "529" in detail)
+
+    # 500 → 仍是普通服务端错误（**不能**被当成过载）
+    cph529.urllib.request.urlopen = make_raise(500, "boom")
+    st500, d500 = cph529.probe("minimax", {"baseUrl": "http://x", "apiKey": "k",
+                                            "models": [{"id": "m"}]})
+    check(f"真身 probe(): 500 → 状态 warn（实得 {st500}）", st500 == "warn")
+    check("真身 probe(): 500 **不**说「无需处理」（500 未必自愈）",
+          "无需处理" not in d500)
+
+    cph529.urllib.request.urlopen = orig_urlopen
+
+    # ⑤ 端到端：模拟 529 场景下「被分类的那条 FAIL」
+    waiting = ["只有 1 个 provider", "明文凭证 ", "未配置任何 fallback",
+               "fallback 全在", "额度耗尽", "Token Plan",
+               "上游瞬时过载", "无需处理"]
+    overload_fail = ("**没有任何可用 provider** —— 暂时无法推理"
+                     "（**上游瞬时过载**，HTTP 529 · **无需处理**，等 1-5 分钟自愈）")
+    check("529 场景下 FAIL 被归为「等你」",
+          any(k in overload_fail for k in waiting),
+          "分类器读的就是这条消息")
+
+    # ⑥ 反面：真故障不能被藏进「等你」（E59）
+    real_dead = ["**没有任何可用 provider** —— 整个系统无法推理",
+                 "provider 检查未通过（详见上方）"]
+    for f in real_dead:
+        check(f"真故障仍算「可处理」：{f[:30]}…",
+              not any(k in f for k in waiting),
+              "E59：不能为了降假警报把真故障一起藏起来")
+
+
 def main():
     print("=" * 62)
     print(" 额度耗尽分类器单测（2026-11-09）")
@@ -298,6 +394,7 @@ def main():
     test_quick_health_pattern()
     test_not_hiding_real_failures()
     test_provider_health_classification()
+    test_overload_529_classification()
     print("=" * 62)
     print(f" 结果: PASS={PASSED}  FAIL={len(FAILED)}")
     if FAILED:

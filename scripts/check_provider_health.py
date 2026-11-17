@@ -79,6 +79,14 @@ def probe(name, p):
             return "bad", f"**配额耗尽**（HTTP 402）{detail}"
         if code == 429:
             return "warn", f"限流（HTTP 429）{detail}"
+        # ⚠️ 2026-11-17 加（HTTP 529 = 上游瞬时过载，**不是**故障也不是额度问题）：
+        #   实测 16:07 quick-health 报「**没有任何可用 provider** —— 整个系统无法推理」
+        #   → 被下游归进「**可处理 - 现在就该修**」→ **假警报**：
+        #   上游过载**谁都不用做什么**（等 1-5 分钟就好，实测直连 1.5s 就恢复了）。
+        #   → 单独识别 529，措辞带上「**无需处理**」，
+        #     让下游的 is_waiting_on_user() 认得出来（与闸门【G2】同一套做法）。
+        if code == 529:
+            return "warn", f"上游瞬时过载（HTTP 529 overloaded，**无需处理**，等 1-5 分钟自愈）{detail}"
         if code >= 500:
             return "warn", f"服务端错误（HTTP {code}）{detail}"
         return "bad", f"HTTP {code} {detail}"
@@ -102,6 +110,7 @@ def main():
     alive, dead, warned, skipped = [], [], [], []
     quota_markers = ("Token Plan", "用量上限", "insufficient balance", "余额", "额度")
     quota_hit = False  # 是否撞上「额度耗尽」特征（只看**报错明细**，不看 provider 名）
+    overload_hit = False  # 是否撞上「上游瞬时过载」（HTTP 529）—— 与额度**完全不同的处置**
     for name, p in providers.items():
         status, detail = probe(name, p)
         if status == "ok":
@@ -112,6 +121,8 @@ def main():
             warned.append(name)
             if any(mk in detail for mk in quota_markers):
                 quota_hit = True
+            if "529" in detail or "overload" in detail.lower():
+                overload_hit = True
         elif status == "skip":
             print(f"  ⏭  SKIP  {name} {detail}")
             skipped.append(name)
@@ -133,6 +144,12 @@ def main():
         #   → 分支永远不触发（19:06 实测漏判一条）。
         if quota_hit:
             print("  ❌ FAIL  **没有任何可用 provider** —— 整个系统暂时无法推理（额度耗尽，需充值）")
+        elif overload_hit:
+            # ⚠️ 2026-11-17：上游 529 过载 → **谁都不用做什么**（等 1-5 分钟自愈）。
+            #   措辞必须带「**无需处理**」，否则下游归「可处理 - 现在就该修」= 长期性假警报
+            #   （与闸门【G2】的 upstream_busy 同一套处置逻辑）。
+            print("  ❌ FAIL  **没有任何可用 provider** —— 暂时无法推理"
+                  "（**上游瞬时过载**，HTTP 529 · **无需处理**，等 1-5 分钟自愈）")
         else:
             print("  ❌ FAIL  **没有任何可用 provider** —— 整个系统无法推理")
         print("           （今天上午三个 provider 全失效时，状态字段依然显示正常）")
