@@ -148,9 +148,19 @@ def main():
     )
 
     # 8.3 零散失败 → 不是连续（这是关键区分）
+    # ⚠️ 2026-11-17 语义修正：**当前段**= 从最新一次往回数、还没被成功打断的那一段。
+    #   这组数据最新是 ok → **当前没有在持续失败** → 当前段 = 0。
+    #   （旧语义「窗口内最长段」会答 1，但那是**历史**数字，
+    #     该归 _max_consecutive_errors_history() 管。）
     cases.append(
-        (ccd._max_consecutive_errors([mk("ok"), mk("error"), mk("ok"), mk("error"), mk("ok")]) == 1,
-         "零散 error 不应被当成连续失败")
+        (ccd._max_consecutive_errors([mk("ok"), mk("error"), mk("ok"), mk("error"), mk("ok")]) == 0,
+         "最新一次已恢复 → 当前段连续失败为 0")
+    )
+    # 8.3b 但**历史**上确实有零散失败 → 历史函数看得到最长段
+    cases.append(
+        (ccd._max_consecutive_errors_history(
+            [mk("ok"), mk("error"), mk("ok"), mk("error"), mk("ok")]) == 1,
+         "零散 error 在历史口径下最长段为 1")
     )
 
     # 8.4 真实数据复现：daily-learning 的 error 序列 → 连续 3
@@ -161,22 +171,38 @@ def main():
         mk("error"),             # 10-30
         mk("ok", True),          # 10-29
     ]
+    # ⚠️ 2026-11-17：这组数据**最新一次是 ok**（11-02 成功），
+    #   → **当前段 = 0**（已恢复）；连续 3 次那段是**历史**，归 history 函数。
     cases.append(
-        (ccd._max_consecutive_errors(dl_runs) == 3,
-         "daily-learning 真实序列应识别出连续 3 次失败")
+        (ccd._max_consecutive_errors(dl_runs) == 0,
+         "daily-learning 真实序列：最新已恢复 → 当前段为 0")
+    )
+    cases.append(
+        (ccd._max_consecutive_errors_history(dl_runs) == 3,
+         "daily-learning 真实序列：历史最长段为 3")
     )
 
     # 8.5 真实数据复现：daily-reflection 计划槽位连挂 → 连续 14+
     dr_runs = [mk("ok", True)] + [mk("error")] * 14
+    # ⚠️ 2026-11-17：同样，最新一次是 ok → 当前段 = 0；14 次是**历史段**。
     cases.append(
-        (ccd._max_consecutive_errors(dr_runs) == 14,
-         "daily-reflection 真实序列应识别出连续 14 次失败")
+        (ccd._max_consecutive_errors(dr_runs) == 0,
+         "daily-reflection 真实序列：最新已恢复 → 当前段为 0")
+    )
+    cases.append(
+        (ccd._max_consecutive_errors_history(dr_runs) == 14,
+         "daily-reflection 真实序列：历史最长段为 14")
     )
 
-    # 8.6 单个 error → 连续 1
+    # 8.6 单个 error（**最新一次就是它**）→ 当前段 = 1
     cases.append(
-        (ccd._max_consecutive_errors([mk("ok"), mk("error")]) == 1,
-         "单个 error 的连续次数为 1")
+        (ccd._max_consecutive_errors([mk("error"), mk("ok")]) == 1,
+         "最新一次是 error → 当前段连续失败为 1")
+    )
+    # 8.6b 最新一次是 ok、上一次是 error → 当前段 = 0（已恢复）
+    cases.append(
+        (ccd._max_consecutive_errors([mk("ok"), mk("error")]) == 0,
+         "最新一次已恢复 → 当前段为 0（历史段由 history 函数管）")
     )
 
     # 8.7 空列表 → 0（不崩）
@@ -186,11 +212,28 @@ def main():
     )
 
     # 8.8 【故障注入】判据要能抓住「中间断了」的情况：
-    #     失败-成功-失败-失败-失败 → 最长连续 3（在数组尾部）
+    #     失败-成功-失败-失败-失败（数组顺序 = 时间倒序，最新在前）
+    #     → 最新那一次是 error，但它和中间那个 error 之间**隔着 ok** → 当前段 = 1
     cases.append(
         (ccd._max_consecutive_errors(
+            [mk("error"), mk("ok"), mk("error"), mk("error"), mk("error")]) == 1,
+         "当前段应从最新一次往回数，被成功打断就断（=1）")
+    )
+    # 8.8b 同一组数据，**历史**最长段 = 3（中间那段的 1 次不算）
+    cases.append(
+        (ccd._max_consecutive_errors_history(
             [mk("error"), mk("ok"), mk("error"), mk("error"), mk("error")]) == 3,
-         "应取所有连续段里最长的那个，而不是第一段或最后一段")
+         "历史最长段应为 3")
+    )
+    # 8.8c ⚠️ **2026-11-17 真实 bug 的回归**：窗口里有一段**早已恢复**的旧账，
+    #     旧实现会拿它当「当前连续失败」报出去 —— 次数和跨度来自两段不同的历史，
+    #     拼成一句话就成了假消息。
+    #     序列：E E(旧账) o E E(当前) → 旧实现答「最长 12」，
+    #     正确答案是**当前段 = 2**。
+    cases.append(
+        (ccd._max_consecutive_errors(
+            [mk("error"), mk("error"), mk("ok"), mk("error"), mk("error")]) == 2,
+         "旧账段不得污染当前段（当前段=2，不是历史最长段）")
     )
 
     # 8.9 【故障注入】runs 为 None → 不该抛异常（历史读取失败的场景）

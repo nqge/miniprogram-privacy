@@ -112,13 +112,51 @@ def _classify_output(summary):
 
 
 def _max_consecutive_errors(runs):
-    """返回**最长连续失败次数**（runs 按时间倒序，最新在前）。
+    """返回**当前仍在持续的连续失败次数**（runs 按时间倒序，最新在前）。
 
     为什么要这个维度（2026-11-03 实测）：
       同样是「3 次 error」，散落在 20 次里 vs **连续 3 天**，
       运维含义完全不同 —— 后者是**静默中断**，用户完全无感。
       daily-learning 10-30/10-31/11-01 连挂 3 天，
       而巡检只因 lastRunStatus=ok 就报「投递正常」。
+
+    ⚠️ 2026-11-17 修正（真 bug，巡检报错了数字）：
+      原实现取**窗口内的最长连续段**（`best = max(best, cur)`），
+      **包括早就恢复过的历史段**。
+
+      实测翻车（daily-reflection，limit=20 窗口）：
+        窗口序列 = E E o E o o E o E E E E E E E E E E E E
+        11-15 E / 11-08 E / 11-03 o / … / 09-01 E … 08-02 E
+        → 原实现算出「**最长连续失败 12 次**」，那一段其实是
+          **2026-08-02 → 09-01 的历史旧账**（早已恢复）。
+        → 但报出来的是「daily-reflection 连续失败 12 次，任务已中断约 12 天」，
+          **这是两件不同的事被拼在一起**：
+            · 「连续失败 12 次」= 8 月那笔旧账（已恢复）
+            · 「已中断约 12 天」= 11-03 成功 → 11-15 失败 的**真实跨度**
+          → **次数和跨度来自两个不同的段**，拼成一句话就成了假消息。
+
+      修法：**只数「从最新一次往回、还没被成功打断的那一段」**——
+      也就是**当前是否还在持续失败**。这正是「连续失败」该问的问题：
+      「它现在还在挂吗？挂了多久？」
+
+      → 历史旧段改由 `_max_consecutive_errors_history()` 单独报
+        （【D】组已有「历史上曾连续失败 N 次」的 WARN 通道，不该混进来）。
+    """
+    cur = 0
+    for r in runs:
+        if r.get("status") == "error":
+            cur += 1
+        else:
+            break
+    return cur
+
+
+def _max_consecutive_errors_history(runs):
+    """返回窗口内**历史上最长**的一段连续失败次数（不要求是当前这段）。
+
+    用途：给「历史上曾连续失败 N 次（现已恢复）」那条 WARN 提供数字 ——
+    **当前段**归 `_max_consecutive_errors()` 管，**历史段**归这里管，
+    两个数字不再互相串味（2026-11-17 实测的 bug 就是它们串了）。
     """
     best = 0
     cur = 0
@@ -446,7 +484,11 @@ def main() -> int:
                         if isinstance(ms, (int, float)) else "?"
                     )
                 # 连续失败比零散失败严重得多：连续 N 天挂 = 静默中断 N 天
-                consec = _max_consecutive_errors(runs)
+                # ⚠️ 2026-11-17：这里问的是「**历史上**曾连续挂过多长」，
+                #   因为这条分支只在 run_status == "ok"（**已恢复**）时才走到。
+                #   → 必须用**历史段**的函数；用「当前段」的话，
+                #     任务一恢复当前段就是 0 → 这条 WARN 会**永远不报**。
+                consec = _max_consecutive_errors_history(runs)
                 # 持续中断了几天（按日历天算，不是次数）
                 span_days = _outage_span_days(runs)
                 # ⚠️ E71：上面（run_status != "ok" 分支）如果已经报了
