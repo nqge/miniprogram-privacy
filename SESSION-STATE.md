@@ -85,7 +85,10 @@
 >    且判据侧加了**跨源 5 分钟窗口去重**（旧版闸门写「写入时刻」、新版本「启动时刻」，差 ~80s）
 >    → 结论：**「跨两个数据源」的问题已经用「合并去重 + 单一权威源」解决了**，
 >    这条待办**关闭**（不是"做不到"，是"换个做法已经做到了"）。
-> ② **【U】基线样本可考虑 P75 或扩大窗口** —— 仍是**可选优化**（当前用均值已能判出"脚本很快但超时失败"，无实际误报）。
+> ② **【U】基线样本可考虑 P75 或扩大窗口** —— ✅ **已核，关闭**（14:00 心跳实测 `scripts/timeout_margin.py`）：判据**早就用中位数**，不是均值；样本窗口已是 **30 条**（2026-11-16 E72 专门从 8 条提到 30），且有**最小样本数保护**（样本太少时中位数会退化成两数平均 → 基线失真）；判据真身已抽到 `scripts/timeout_margin.py` 并有自检（本次跑：✅ 全通过）。
+>    → **P75 的意义不大**：中位数本来就抗单点异常，而【U】的 FAIL 判据是 median/timeout > 0.7。
+>    → **注意**：我原先写「当前用均值」是**记错了**（凭印象，没看代码）—— 已更正。
+>    **教训**：**连「自己的判据用的是什么统计量」都要现查代码**，不能凭印象写进状态文件 —— 写错了会让下个会话去优化一个**不存在的问题**。
 > ③ **闸门历史只在本地** —— ✅ **已落地**：`memory/gate-history.jsonl` 已进 git（8 行，结构化，含 result + reason）。
 
 **现象**：14:47 写的「**巡检现状**：PASS=80 ...」那行**又不见了**。
@@ -277,7 +280,7 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 > cron 里的两个任务：enabled=false（只作为被触发的目标，不再自触发）
 > ```
 > **仍需牛哥哥决策的长期项**：MiniMax Token Plan **额度周期性耗尽** —— 现在**两个 agentTurn 任务都已经有闸门保护**（额度不够就跳过，不再空转 300s），但**额度本身还是得充值**（充值/升级，或加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证（arkcode/glmcode/qwen/kimicode）待清理。
-> **新记的待办（不阻塞）**：① 闸门目前只判「够/不够」，**不记录「这次被跳过了」到结构化文件** → 建议给闸门写一个 `memory/gate-log.jsonl`，让「连续 N 次被跳过」也能被巡检看见（否则闸门太安静，额度长期枯竭又变成背景噪音 —— 正是 E71 那个坑）；② preflight 的结论还没写进 cron 的 run summary → 让失败**可归因**；③ 【U】基线样本可考虑 P75 或扩大窗口。
+> **新记的待办（不阻塞）**：① 闸门目前只判「够/不够」，**不记录「这次被跳过了」到结构化文件** → 建议给闸门写一个 `memory/gate-log.jsonl`，让「连续 N 次被跳过」也能被巡检看见（否则闸门太安静，额度长期枯竭又变成背景噪音 —— 正是 E71 那个坑）→ ✅ **已落地**（`memory/gate-history.jsonl`，已进 git，结构化 ts/ts_end/job/result/reason）；② preflight 的结论还没写进 cron 的 run summary → 让失败**可归因** → ✅ **已用另一条路解决**（cron API 没有「记一笔但不执行」的入口，写 run entry 只能 `cron run` 而那会真跑任务；→ 改用**单一权威源** `gate-history.jsonl` + 判据侧跨源 5 分钟窗口去重）；③ 【U】基线样本可考虑 P75 或扩大窗口 → ✅ **已核，关闭**（判据早就用**中位数**、窗口 30 条、有最小样本保护，见上方「待办处置」段）。
 
 <details><summary>11-16 09:15 心跳原始记录（E71 落地 + 预检 529/429 分家 + 补 5 天笔记）</summary>
 
@@ -290,13 +293,16 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 > **仍需牛哥哥决策的长期项（未变）**：MiniMax Token Plan **额度周期性耗尽**（充值/升级 或 加第二把 key 拆配额）—— **daily-learning 已连续 6 次、daily-reflection 已连续 12 次**被它打中，**这是当前最高优先级**（本轮已把它从「每天报一遍没人动」升级成「一眼就能看到中断了几天」）；fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）；4 个死亡 provider 凭证（arkcode/glmcode/qwen/kimicode）待清理。
 > **新记的待办（不阻塞）**：① **daily-learning 的 3 次模型级重试会重新注入整份上下文**（11-15 那次 3 次重试 ≈ 180k token 却零产出）→ 这会**放大**额度消耗，值得给 cron 加 `maxRetries: 1` 或换更小的模型跑。② 预检已能在 529 时重试，但 **cron 指令里还没要求「预检重试仍失败就直接放弃并记录」** → 建议把 preflight 的结论写进 run summary，让失败**可归因**。
 
+</details>
 <details><summary>11-10 21:05 心跳追加（quick-health 假警报归类修复 · E69 同源）</summary>
 
+</details>
 <details><summary>11-10 15:44 心跳追加（quick-health 假警报归类修复 · E69 同源）</summary>
 > **本轮产出**：① 补写 `memory/2026-11-10.md`（**184 汉字**）+ `memory/daily-notes-index.md`（**198 汉字**），两处 `--check` 双 PASS —— 09:00 daily-learning 因额度耗尽失败且**未补跑**，当天笔记是缺的；② **新提升 L1 E69**（第 69 条）：「**健康端点返回的是硬编码的 ok —— 探针没坏，被探的对象在撒谎**」→ E63 的反面变种（E63 是探针坏了，本条是探针完全正常但目标在自我认证，E63 的自检照常通过）；`verify_l1_retrieval.py` **69/69 PASS**，E69 检索**排名第 1**（主库 0.8079）/ 第 2（独立文件 0.7783）；③ 全量巡检复跑 **PASS=75 FAIL=0 等你=3**（两个 FAIL 消失）；④ **09:00 daily-learning 仍无补跑**（明早 09:00 计划槽位会自愈）。
 > **今日巡检**：全量 **PASS=75 FAIL=0 WARN=5 等你=3**（30 组）· 03:00 backup-audit **PASS=19 FAIL=0** · 记忆索引 **97/97 文件 · 698 块 · Dirty=no** · Embeddings ready · 记忆检索端到端可用（命中 MEMORY.md:1）· 茶馆 08:15 拉 96 条 issue **新增 0**（无新内容，不硬凑笔记）· 4 个 systemd timer 按期。
 > **仍需牛哥哥决策的长期项（未变）**：MiniMax Token Plan 额度周期性耗尽（充值/升级 或 加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理（等牛哥哥点头）。
 
+</details>
 <details><summary>11-10 15:44 心跳追加（quick-health 假警报归类修复 · E69 同源）</summary>
 
 > **发现**：`logs/quick-health.log` 从 06:12 起**每 30 分钟**报「**没有任何可用 provider** —— 整个系统无法推理」FAIL，但**系统当时明明能推理**（心跳会话本身就跑在上面）。查 journal 拿到 14:58 的真实报错：
@@ -349,6 +355,7 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 > **11-09 09:00 daily-learning**：✅ `ok / delivered / 822s`，自愈补记了 `memory/2026-11-08.md`（含来源标注）+ 把 11-09 的内容归位，新增 L1 **E67**；`verify_l1_retrieval.py` **67/67 PASS**；MEMORY.md 计数已同步 67/67。
 > **仍需牛哥哥决策的长期项（未变）**：MiniMax Token Plan 额度周期性耗尽（充值/升级 或 加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理（等牛哥哥点头）。
 
+</details>
 <details><summary>11-09 09:00 daily-learning 原始记录（E67 来源）</summary>
 
 > **最后更新**: 2026-11-09 09:15
@@ -358,6 +365,7 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 > **今日巡检**（08:02 心跳已完成）：07:00 巡检 FAIL=2 → 复核为 MiniMax 额度耗尽误分类，已修分类器 + 17/17 单测，复跑 FAIL=0；03:00 backup-audit PASS=18；茶馆 04:15 拉 96 条 issue 新增 0。
 > **仍需牛哥哥决策的长期项（未变）**：MiniMax Token Plan 额度周期性耗尽（充值/升级 或 加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理（等牛哥哥点头）。
 
+</details>
 <details><summary>11-07 09:56 心跳原始记录（E65 来源）</summary>
 
 > **最后更新**: 2026-11-07 10:00
@@ -367,6 +375,7 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 > **无「可处理」故障**。仍需牛哥哥决策的长期项（未变）：MiniMax Token Plan 额度周期性耗尽（充值/升级 或 加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理（方案 3：保留骨架、仅置空 apiKey，**等牛哥哥点头**）。
 > **下方保留**：11-07 09:00 daily-learning 原始记录（E64 来源）。
 
+</details>
 <details><summary>11-07 09:00 daily-learning 原始记录（E64 来源）</summary>
 
 > **最后更新**: 2026-11-07 09:00
@@ -387,6 +396,7 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 > **今日巡检**：07:00 PASS=77 FAIL=0 WARN=6 · 03:00 backup-audit PASS=19 FAIL=0 · 茶馆无新摘要（上次原始摘要 10-26，【I】显示已全部蒸馏）· 上下文 4% · 09:53 配额预检 ✅ 额度可用、无补跑需求。
 > **无「可处理」故障**。仍需牛哥哥本人决策的**长期项**（未变）：MiniMax Token Plan 额度周期性耗尽（充值/升级 或 加第二把 key 拆配额）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清理（方案 3：保留骨架、仅置空 apiKey，**等牛哥哥点头**）。
 
+</details>
 <details><summary>11-06 09:00 daily-learning 原始记录</summary>
 
 > **最后更新**: 2026-11-06 09:00
@@ -397,6 +407,7 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 > **自愈检查**：11-04 / 11-05 的「📚 每日学习」小节均存在且各只有 1 个 → **无需补记**。
 > **检索调试记录**：重建索引时 `openclaw memory index --force` 连续两次 **502 rate limit exceeded(RPM)**（MiniMax 侧）→ 间隔 ~45s 重试即成功；**先 `DELETE FROM embedding_cache` 再重建**（否则新旧内容混排，TOOLS.md 已记）。
 
+</details>
 <details><summary>11-05 10:52 心跳原始记录（已归档）</summary>
 > **状态**: ✅ **11-05 10:52 心跳**：**残留 provider 凭证实测完毕**（昨天巡检的 WARN「需人工确认」已从待确认变成已结论）—— 4 个 provider **全部死亡**（arkcode 6/7 模型 404 `UnsupportedModel`+`InvalidSubscription`；glmcode 7/7 模型 401 `身份验证失败`；qwen 7/8 模型 400 `Access denied`；kimicode 404 `resource_not_found_error`），**无一模型可用**。
 > ⚠️ **探针校准教训**：第一次直接探 `models.json` 的 key，**minimax 也 401**（但 minimax 是正在用的主 provider！）→ **是探针错，不是凭证错**。根因：`models.json` 存旧 key，`openclaw.json` 存当前生效 key，靠 `models.mode=merge` 覆盖 → 必须探「合并后的有效配置」。改用合并配置 → minimax ✅ 200，探针才可信。**先拿已知可用的对象校准探针，再探未知的。**
@@ -413,6 +424,7 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 > **今日巡检**：07:00 PASS=77 FAIL=0 WARN=6 · 03:00 backup-audit PASS=19 FAIL=0 · 08:15 茶馆监控 96 条 issue / **新增 0**（无新内容，不硬凑笔记）。
 > **仍需牛哥哥本人操作**：MiniMax Token Plan 额度**周期性**耗尽 → 充值/升级，或加第二把 key（价值是**拆开共享配额**，不是容灾冗余）；fallback 链 2 项全在同一 provider 同一账号下 → provider 级故障时兜底无效（【M】）。另：agent 级目录残留 4 个 provider 凭证（arkcode/glmcode/qwen/kimicode）待人工确认后清理。
 
+</details>
 <details><summary>11-05 09:00 daily-learning 原始记录（已归档）</summary>
 
 > **最后更新**: 2026-11-05 09:00
