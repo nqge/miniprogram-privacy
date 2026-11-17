@@ -510,7 +510,7 @@ provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证待清�
 
 ---
 <!-- BEGIN:gen_healthcheck_status -->
-**巡检现状**: 31 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=77 FAIL=0 WARN=4
+**巡检现状**: 31 组断言，每日 07:00 自动运行 + 飞书告警｜PASS=79 FAIL=0 WARN=4
 <!-- END:gen_healthcheck_status -->
 
 ## 🧠 上下文状态

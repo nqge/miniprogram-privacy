@@ -2886,6 +2886,46 @@ else:
             failed = 1
         else:
             print(f"PASS SESSION-STATE.md 头部新鲜({age} 天前更新)")
+
+# ⚠️ 2026-11-17 加（P9 的自动化版）：**其余「声明自己是当前状态」的文件**
+#   也要查新鲜度 —— 只查 SESSION-STATE.md 会漏掉同族的静默过期。
+#
+#   为什么（实测，不是推断）：
+#     `memory/working-buffer.md` 头部白纸黑字写着
+#     「⚠️ 本文件是**当前轮**的工作缓冲区」，
+#     内容却停在 2026-10-28，声称「26 组断言 / L1 52 条 / 索引 485 块」——
+#     而真实值是 **31 组 / 77 条 / 801 块**，**过期 20 天**。
+#     → 声明了「当前」，内容却描述过去（正是 P9 描述的失败形态）。
+#     → 而【L】组当时只查 SESSION-STATE.md → **这份过期状态天天被下一个会话读到**。
+#
+#   → 判据：文件头部有「最后更新」日期的，看日期；
+#     没标的，按 mtime 判（并区分「运行时状态文件」，那种本来就是自动更新的）。
+#   → 用 **WARN 不用 FAIL**：这些文件不是自动生成的，
+#     偶尔几天没更新是正常的（比如没人开会话），
+#     判 FAIL 会制造噪音；但**过太久**就该提醒 —— 因为它们会被下个会话当事实读。
+STALE_ENTRIES = {
+    'proactive-tracker.md': 7,      # 主动改进追踪器 —— 名字就是「追踪」，该常新
+    'memory/working-buffer.md': 3,  # 工作缓冲区 —— 头部明写「当前轮」
+}
+for rel, max_age in STALE_ENTRIES.items():
+    fp = os.path.join(WS, rel)
+    if not os.path.exists(fp):
+        print(f"WARN {rel} 不存在（连续性入口缺失，会让下个会话少一个入口）")
+        continue
+    s = open(fp, encoding='utf-8', errors='replace').read()
+    m = re.search(r'\*\*最后更新\*\*:\s*(\d{4}-\d{2}-\d{2})', s)
+    if m:
+        age = (datetime.date.today() - datetime.date.fromisoformat(m.group(1))).days
+    else:
+        age = (datetime.datetime.now().timestamp()
+               - os.path.getmtime(fp)) / 86400
+        age = int(age)
+    if age > max_age:
+        print(f"WARN {rel} 已 {age} 天未更新（头部声明为「当前状态」，实际可能已过期）"
+              f" → 建议刷新，否则下个会话会把过期数字当事实读（P9）")
+    else:
+        print(f"PASS {rel} 新鲜({age} 天前更新)")
+
 print(f"__CONT_FAILED__={failed}")
 PY
 )
