@@ -72,7 +72,7 @@ def _is_quota_signal(raw: str) -> bool:
     return any(m in raw for m in QUOTA_MARKERS)
 
 
-def probe_once(tokens: int = 15000):
+def probe_once(tokens: int = 15000, timeout: int = 30):
     """用接近真实负载的请求探额度。
 
     ⚠️ 关键：**不能用 1-token 小请求当额度信号**。
@@ -94,7 +94,7 @@ def probe_once(tokens: int = 15000):
     )
     t0 = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read().decode("utf-8", "replace")
             dt = time.time() - t0
             d = json.loads(raw)
@@ -124,7 +124,7 @@ def probe_once(tokens: int = 15000):
 
 
 def probe(tokens: int = 15000, retries: int = 3, backoff: int = 25,
-          degrade_ladder=None):
+          degrade_ladder=None, probe_timeout: int = 30, budget_s: float = 150):
     """探测额度 —— 对**瞬时**失败（529 过载）自动重试。
 
     ⚠️ 2026-11-17 加（实测触发）：**上游过载是「按负载排队」，不是「有没有额度」**。
@@ -154,10 +154,29 @@ def probe(tokens: int = 15000, retries: int = 3, backoff: int = 25,
       · 529（过载）→ 退避后重试，最多 retries 次
       · 429/402（额度）→ **不重试**（重试也不会有额度，等充值）
       · 其他错误 → 不重试
+
+    ⚠️ 2026-11-17 加（**总时间预算**）：预检是**被闸门调用的子进程**，
+    闸门给它的 timeout 是 **180s**；而旧参数（单次探测 90s × 3 次 + 25s/50s 退避）
+    最坏要 **345s** → **必然超支** → 闸门走 `subprocess.TimeoutExpired`
+    → 「预检超时 → 放行」= **fail-open**。
+    → fail-open 本身是对的（不确定 ≠ 额度不足，不该因为预检慢就永远不干活），
+      但**不该是常态**。
+    → 现在：单次探测 timeout 降到 **30s**（实测正常 1-2s，30s 足够），
+      并且用 `budget_s` 给**整个 probe()** 封顶 —— 超预算就停止重试，
+      按现有证据给结论。→ 最坏耗时 ≈ 30×6 + 退避 ≈ 230s… 仍偏大，
+      所以 budget 默认取 150s，**保证落在闸门的 180s 之内**。
     """
+    t_start = time.time()
+
+    def _over_budget() -> bool:
+        return (time.time() - t_start) > budget_s
+
     last = (False, "未探测", 0.0)
     for attempt in range(1, retries + 1):
-        ok, msg, dt = probe_once(tokens)
+        if _over_budget():
+            print(f"  ⏱ 预检已用 {time.time() - t_start:.0f}s（预算 {budget_s:.0f}s）→ 停止重试")
+            break
+        ok, msg, dt = probe_once(tokens, timeout=probe_timeout)
         last = (ok, msg, dt)
         transient = "上游繁忙：HTTP 529" in msg
         if ok or not transient or attempt == retries:
@@ -173,9 +192,12 @@ def probe(tokens: int = 15000, retries: int = 3, backoff: int = 25,
         for smaller in degrade_ladder:
             if smaller >= tokens:
                 continue
+            if _over_budget():
+                print(f"  ⏱ 预检已用 {time.time() - t_start:.0f}s（预算 {budget_s:.0f}s）→ 不再降档")
+                break
             print(f"  ↻ 仍是上游过载 → **降档**再探：{tokens} → {smaller} token")
             print(f"    （大探针过不去 ≠ 这活干不了；降档只证明「这条路现在通」）")
-            ok, msg, dt = probe_once(smaller)
+            ok, msg, dt = probe_once(smaller, timeout=probe_timeout)
             if ok:
                 print(f"  ✅ 降档探测通过（~{smaller} token，{dt:.2f}s）→ 通路恢复")
                 return True, f"额度可用（降档 ~{smaller} token 探测通过，上游过载中）", dt
@@ -228,6 +250,12 @@ def main():
     ap.add_argument("--degrade-ladder", default="8000,3000,1000",
                     help="529 过载时的**降档探针阶梯**（逗号分隔，默认 8000,3000,1000）。"
                          "传空字符串则关闭降档。")
+    ap.add_argument("--probe-timeout", type=int, default=30,
+                    help="单次探测的网络超时秒数（默认 30；实测正常 1-2s）")
+    ap.add_argument("--budget", type=float, default=150,
+                    help="**整个预检的时间预算**秒数（默认 150）。"
+                         "必须小于调用方给的 timeout（闸门给 180s），"
+                         "否则会被判「预检超时 → 放行」（fail-open）。")
     args = ap.parse_args()
 
     print("=" * 60)
@@ -251,7 +279,8 @@ def main():
     ladder = [int(x) for x in (args.degrade_ladder or "").split(",") if x.strip().isdigit()]
     print(f"\n【额度探测】（~{args.probe_tokens} token 真实负载，不用小请求）")
     ok, msg, dt = probe(args.probe_tokens, retries=1 if args.no_retry else 3,
-                        degrade_ladder=ladder)
+                        degrade_ladder=ladder,
+                        probe_timeout=args.probe_timeout, budget_s=args.budget)
     print(f"  {'✅' if ok else '❌'} {msg}")
 
     # ③ 结论

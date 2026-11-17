@@ -6,3 +6,4 @@
 {"ts": "2026-11-17T09:28:23", "job": "daily-learning", "result": "blocked", "reason": "结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通"}
 {"ts": "2026-11-17T09:28:23", "job": "daily-learning", "result": "skipped", "reason": "upstream_busy"}
 {"ts": "2026-11-17T09:38:31", "job": "daily-learning", "result": "triggered", "rc": 0}
+{"ts": "2026-11-17T16:35:44", "ts_end": "2026-11-17T16:35:44", "job": "daily-learning", "result": "ok", "reason": "gate_passed", "check_only": true}

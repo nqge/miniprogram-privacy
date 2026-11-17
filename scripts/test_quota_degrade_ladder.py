@@ -30,11 +30,11 @@ spec.loader.exec_module(qp)
 FAILS = []
 
 
-def check(cond, label):
+def check(cond, label, why=""):
     if cond:
         print(f"  ✅ {label}")
     else:
-        print(f"  ❌ {label}")
+        print(f"  ❌ {label}" + (f" —— {why}" if why else ""))
         FAILS.append(label)
 
 
@@ -46,7 +46,7 @@ def mk(seq):
     """造一个按 seq 依次返回的 probe_once。"""
     calls = []
 
-    def fake(tokens):
+    def fake(tokens, timeout=None):
         calls.append(tokens)
         item = seq[min(len(calls) - 1, len(seq) - 1)]
         return item
@@ -117,6 +117,43 @@ qp.probe_once = fake
 ok, msg, dt = qp.probe(15000, retries=1, backoff=0, degrade_ladder=[8000, 3000])
 check(not ok, "全挂 → 拦下")
 check("上游繁忙" in msg or "过载" in msg, "结论仍是「上游过载」，不是「额度不足」")
+
+print("\n【⑧】时间预算：预检必须在闸门的 timeout 内结束（防 fail-open）")
+# 2026-11-17 实测发现的隐患：
+#   闸门给预检 timeout=180s，而预检最坏耗时 =
+#     3 次探测 × 90s + 退避 25s/50s = **345s**（还没算降档阶梯）
+#   → 必然超支 → 闸门走 subprocess.TimeoutExpired → 「预检超时 → 放行」= **fail-open**。
+#   fail-open 本身没错（不确定 ≠ 额度不足），但**不该是常态**。
+#   → 修法：预检自己管住时间（budget），且 **budget < 闸门 timeout**。
+import re
+from pathlib import Path as _P
+
+_gate_src = (_P(WS) / "scripts" / "daily_learning_gate.py").read_text(encoding="utf-8")
+_pf_src = (_P(WS) / "scripts" / "quota_preflight.py").read_text(encoding="utf-8")
+
+m_gate = re.search(r"GATE_PREFLIGHT_TIMEOUT\s*=\s*(\d+)", _gate_src)
+m_budget = re.search(r"PREFLIGHT_BUDGET_S\s*=\s*(\d+)", _gate_src)
+check(m_gate is not None, "闸门有 GATE_PREFLIGHT_TIMEOUT 常量")
+check(m_budget is not None, "闸门有 PREFLIGHT_BUDGET_S 常量")
+
+if m_gate and m_budget:
+    gt, bg = int(m_gate.group(1)), int(m_budget.group(1))
+    check(bg < gt, f"预检预算({bg}s) < 闸门 timeout({gt}s)",
+          "预算必须小于 timeout，否则闸门会 fail-open")
+    check(gt - bg >= 20, f"留有余量（timeout - 预算 = {gt - bg}s）",
+          "要给进程启动和收尾留余量")
+
+check('"--budget"' in _gate_src, "闸门把 --budget 传给预检",
+      "不传的话预检仍按自己的最坏耗时跑 → 又超支")
+check("timeout=GATE_PREFLIGHT_TIMEOUT" in _gate_src, "闸门用常量而不是字面量 180",
+      "字面量 180 和预算 150 很容易改一个不改另一个")
+check("budget_s" in _pf_src, "预检有 budget_s 参数")
+check("_over_budget" in _pf_src, "预检有超时预算检查")
+m_pt = re.search(r"def probe_once\(tokens: int = \d+, timeout: int = (\d+)\)", _pf_src)
+check(m_pt is not None, "probe_once 的单次 timeout 可配")
+if m_pt:
+    check(int(m_pt.group(1)) <= 30, f"单次探测 timeout={m_pt.group(1)}s ≤ 30",
+          "实测正常 1-2s；90s 的话 3 次就 270s")
 
 print("\n" + "=" * 60)
 if FAILS:

@@ -74,6 +74,14 @@ DEFAULT_JOB = "daily-learning"
 #   → 预检内置降档阶梯（8000→3000→1000）：同尺寸重试用尽后降档再探，
 #     只要有一档通过就放行（预检侧只在 529 时降档，429/402 绝不降档）。
 PROBE_TOKENS = 15000
+
+# ⚠️ 2026-11-17 加：闸门给预检的 timeout，和预检自己的预算**必须成对维护**。
+#   预检内部有 3 次重试 + 降档阶梯 + 退避睡眠 → 最坏耗时可以远超 timeout。
+#   超了就会触发闸门的 fail-open（「预检超时 → 放行」）。
+#   → **预检预算 < 闸门 timeout**，留出余量给进程启动和收尾。
+#   ⚠️ 这两个数**必须一起改**（改一个不改另一个 → 又会 fail-open）。
+GATE_PREFLIGHT_TIMEOUT = 180   # 闸门给子进程的 timeout
+PREFLIGHT_BUDGET_S = 150       # 预检自己的总时间预算（必须 < 上面那个）
 PREFLIGHT = WS / "scripts" / "quota_preflight.py"
 
 # 当前生效的任务名（由 main() 从 --job 设置；模块级默认值保证函数可单测）
@@ -217,11 +225,18 @@ def run_gate():
     env = {**os.environ, "OPENCLAW_LOG_LEVEL": "warn"}
     try:
         r = subprocess.run(
-            [sys.executable, str(PREFLIGHT), "--probe-tokens", str(PROBE_TOKENS)],
-            capture_output=True, text=True, timeout=180, env=env,
+            [sys.executable, str(PREFLIGHT),
+             "--probe-tokens", str(PROBE_TOKENS),
+             # ⚠️ 2026-11-17：把**预算**显式告诉预检。
+             #   否则预检的最坏耗时（3×90s 探测 + 75s 退避 = 345s）
+            #   会**超过**闸门给的 timeout → 闸门走 TimeoutExpired → fail-open。
+            #   fail-open 本身没错（不确定 ≠ 额度不足），
+            #   但它**不该是常态** → 让预检自己管住时间（--budget）。
+             "--budget", str(PREFLIGHT_BUDGET_S)],
+            capture_output=True, text=True, timeout=GATE_PREFLIGHT_TIMEOUT, env=env,
         )
     except subprocess.TimeoutExpired:
-        log("⚠️ 预检超时（180s）→ 放行（不确定 ≠ 额度不足）")
+        log(f"⚠️ 预检超时（{GATE_PREFLIGHT_TIMEOUT}s）→ 放行（不确定 ≠ 额度不足）")
         return True, "预检超时，放行"
     out = (r.stdout or "") + (r.stderr or "")
     if r.returncode == 0:
