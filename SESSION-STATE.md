@@ -1,6 +1,14 @@
 # SESSION-STATE.md
 
-> **最后更新**: 2026-11-16 18:35
+> **最后更新**: 2026-11-17 08:20
+> **本轮验收**：✅ **11-17 08:18 心跳（清掉一个真问题：远端滞后）** —— 07:00 巡检 **PASS=80 FAIL=0 WARN=4 等你=2**，但 **03:00 的 backup-audit 报了 FAIL：本地领先远端 2 个 commit**。查证后确认是**真滞后不是误报**：
+> - 两个未推送 commit 分别是 `cc4aa97`（修闸门消息里重复的「（E74）」）和 `4e84fec`（茶馆监控 last_check 状态提交）—— **都是正常代码/状态改动，不含凭证**
+> - 先查了 TOOLS.md 里记的坑：**`url.https://github.com/.insteadof` 已不存在**（exit=1）→ SSH 不会被重写成 HTTPS，推送路径干净
+> - `git push origin master` → `2829963..4e84fec` ✅ 成功，`git rev-list --count origin/master..HEAD` = **0**
+> **教训**：backup-audit 的 FAIL **值得当回事**，但也别一看到 FAIL 就慌 —— 先查 commit 内容再推（万一真有密钥，得先清历史再推，不能直接 push）。**顺序是：查内容 → 查 remote 重写 → 再推**。
+> **其余项**：8 个 systemd timer 全部按期（daily-learning 09:00 即将触发）· `systemctl --user --failed` = **0 个失败单元** · 上下文 **4%**（38k/1.0m，0 次压缩）· 茶馆 08:15 轮新增 0 条（无新摘要要学）· `memory/2026-11-17.md` 今日尚未创建（今天还没有学习笔记产出，属正常节奏）。
+> **仍需牛哥哥决策的长期项**（不变）：MiniMax Token Plan 额度周期性耗尽（需充值/加第二把 key）· fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效（【M】）· 4 个死亡 provider 凭证（arkcode/glmcode/qwen/kimicode）待清理。
+
 > **状态**: ✅ **11-16 17:55 心跳（闸门架构的第一次真实验收 —— 通过）**：上一轮把闸门、断言、漂移检查都写完了，但**都是手动触发的**。本轮做了一件该做的事：**用 systemd 手动 start 那个 service，模拟明天 09:00 timer 的真实路径**，把整条链**从 systemd 一路验到产出**。
 > **验收结果（全链路实测，不是推断）**：
 > ```
