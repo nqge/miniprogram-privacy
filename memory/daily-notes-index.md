@@ -394,6 +394,6 @@ _已提升至 L1：E75_
 但先查 `memory/gate-history.jsonl`：当天若有一次 `triggered` 就放行，
 若全是 `skipped` 则按「闸门拦的」措辞，**别报成任务坏了**。
 
----
-
 _已提升至 L1：E76_
+
+---
