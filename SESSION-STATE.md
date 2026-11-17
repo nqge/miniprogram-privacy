@@ -1,6 +1,13 @@
 # SESSION-STATE.md
 
-> **最后更新**: 2026-11-17 08:20
+> **最后更新**: 2026-11-17 09:35
+> **本轮验收**：✅ **11-17 09:35 心跳 —— 闸门在真实上游事故里通过了（且救了场）** —— 09:00 systemd 闸门触发 daily-learning 时，预检连试 3 次全部 **HTTP 529 overloaded_error**（"当前服务集群负载较高"，码 2064）→ 闸门按设计关闭，`reason=upstream_busy`。
+> **E66 那个修复今天第一次在真实事故里显形**：如果 reason 当初写死 `quota`，连续 3 次 529 会被【G2】断言报成「额度长期枯竭，需要充值」→ 牛哥哥会拿着**假警报**给一个没问题的服务付钱。实际报出来的是「最近一次被闸门跳过（原因 upstream_busy），连续 1 次」= WARN ✅。
+> **实测确认（不是推断）**：① gateway active · 嵌入代理正常（07:01 仍有成功调用）· 记忆检索正常 → **只有 chat/completions 被上游堵**；② 直连 `max_tokens=5` → **HTTP 200 / 1.05s**，但 15000 token 探测 → 529，探针量 15000❌ / 8000❌ / 3000✅ / 2000❌ → **上游按负载排队，与额度无关**；③ **备用 provider 实测全是死的**：arkcode 404（不支持 coding plan）· glmcode 401（身份验证失败）· qwen 400（Access denied）· kimicode 403（无 Kimi Code 权限）→ **fallback 链 2 项同 minimax 同账号 → MiniMax 是唯一活路，【M】的 WARN 是准的**。
+> **后果**：**今天的 daily-learning 没能跑**（闸门拦对了，不是 bug）。已写进 `memory/2026-11-17.md`。
+> **新记的可立即执行的对策**：闸门**没透传** `--probe-tokens`（写死 15000）→ 应做成可配置，并在 529 时**降档重试**而不是直接判死（实测 3000 能过 → "15000 过不去" ≠ "这活干不了"）。
+> **仍需牛哥哥决策的长期项**（本轮**有实证**，不再是推测）：① **MiniMax Token Plan 额度周期性耗尽**（需充值/加第二把 key）；② **fallback 链 2 项同 provider 同账号 → provider 级故障兜底无效** —— 今天已实测：上游过载时**没有任何备用路**；③ **4 个死亡 provider 凭证**（arkcode/glmcode/qwen/kimicode）—— 今天逐个发请求，**确认全部失效**（404/401/400/403），建议清理或充值后纳入 fallback。
+
 > **本轮验收**：✅ **11-17 08:18 心跳（清掉一个真问题：远端滞后）** —— 07:00 巡检 **PASS=80 FAIL=0 WARN=4 等你=2**，但 **03:00 的 backup-audit 报了 FAIL：本地领先远端 2 个 commit**。查证后确认是**真滞后不是误报**：
 > - 两个未推送 commit 分别是 `cc4aa97`（修闸门消息里重复的「（E74）」）和 `4e84fec`（茶馆监控 last_check 状态提交）—— **都是正常代码/状态改动，不含凭证**
 > - 先查了 TOOLS.md 里记的坑：**`url.https://github.com/.insteadof` 已不存在**（exit=1）→ SSH 不会被重写成 HTTPS，推送路径干净

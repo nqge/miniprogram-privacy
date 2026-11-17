@@ -67,6 +67,13 @@ from pathlib import Path
 
 WS = Path("/root/.openclaw/workspace")
 DEFAULT_JOB = "daily-learning"
+
+# ⚠️ 2026-11-17 加：闸门**透传**探针量给预检（原来写死 15000，闸门想调也调不了）。
+#   实测依据：上游过载时「15000 ❌ / 8000 ❌ / 3000 ✅ / 2000 ❌」，
+#   而 max_tokens=5 的小请求 → 200。→ **上游按负载排队，与额度无关**。
+#   → 预检内置降档阶梯（8000→3000→1000）：同尺寸重试用尽后降档再探，
+#     只要有一档通过就放行（预检侧只在 529 时降档，429/402 绝不降档）。
+PROBE_TOKENS = 15000
 PREFLIGHT = WS / "scripts" / "quota_preflight.py"
 
 # 当前生效的任务名（由 main() 从 --job 设置；模块级默认值保证函数可单测）
@@ -188,7 +195,7 @@ def run_gate():
     env = {**os.environ, "OPENCLAW_LOG_LEVEL": "warn"}
     try:
         r = subprocess.run(
-            [sys.executable, str(PREFLIGHT)],
+            [sys.executable, str(PREFLIGHT), "--probe-tokens", str(PROBE_TOKENS)],
             capture_output=True, text=True, timeout=180, env=env,
         )
     except subprocess.TimeoutExpired:

@@ -123,8 +123,26 @@ def probe_once(tokens: int = 15000):
         return False, f"探测失败：{type(e).__name__} {e}", 0.0
 
 
-def probe(tokens: int = 15000, retries: int = 3, backoff: int = 25):
+def probe(tokens: int = 15000, retries: int = 3, backoff: int = 25,
+          degrade_ladder=None):
     """探测额度 —— 对**瞬时**失败（529 过载）自动重试。
+
+    ⚠️ 2026-11-17 加（实测触发）：**上游过载是「按负载排队」，不是「有没有额度」**。
+    同一天实测的探针阶梯：
+      15000 ❌ → 8000 ❌ → 3000 ✅ → 2000 ❌（注意：不是单调的）
+    而 `max_tokens=5` 的小请求 → **HTTP 200 / 1.05s**。
+
+    → 结论：**「大探针过不去」≠「这活干不了」**。
+    原来只有「同尺寸重试」，同尺寸在过载时基本是死路 ——
+    所以加**降档阶梯**（--degrade-ladder）：同尺寸重试用尽后，
+    依次用更小的尺寸再探一次，**只要有一档通过就放行**。
+
+    ⚠️ 但**降档探针通过 ≠ 额度够** —— 小探针只证明「这条路现在通」，
+    不证明「跑 15000 token 的活不会中途被限流掐死」。
+    → 因此降档只在 **529（上游过载）** 时启用；
+      **429/402（额度）绝不降档** —— 额度不足时换小探针也还是不够，
+      降了只会**给出「可以跑」的假结论**，那才是真正的危害。
+
 
     ⚠️ 2026-11-16 加：整点高峰上游会返回 HTTP 529（overloaded_error，
     上游自己说「通常 1-5 分钟内恢复」）。**529 不是额度问题** ——
@@ -148,6 +166,24 @@ def probe(tokens: int = 15000, retries: int = 3, backoff: int = 25):
         print(f"  ⚠️  {msg[:80]}")
         print(f"  ↻ 上游瞬时过载，{wait}s 后重试（第 {attempt}/{retries} 次）…")
         time.sleep(wait)
+
+    # ── 同尺寸重试用尽，且确实是「上游过载」→ 走**降档阶梯** ──
+    # 只有 529 走到这里；429/402（额度）早已在上面 break 掉了。
+    if not last[0] and "上游繁忙：HTTP 529" in last[1] and degrade_ladder:
+        for smaller in degrade_ladder:
+            if smaller >= tokens:
+                continue
+            print(f"  ↻ 仍是上游过载 → **降档**再探：{tokens} → {smaller} token")
+            print(f"    （大探针过不去 ≠ 这活干不了；降档只证明「这条路现在通」）")
+            ok, msg, dt = probe_once(smaller)
+            if ok:
+                print(f"  ✅ 降档探测通过（~{smaller} token，{dt:.2f}s）→ 通路恢复")
+                return True, f"额度可用（降档 ~{smaller} token 探测通过，上游过载中）", dt
+            # 降档探针**也**报额度类错误 → 说明不是过载，是真没额度 → 立刻停
+            if "HTTP 429" in msg or "HTTP 402" in msg:
+                return False, msg, dt
+            print(f"  ⚠️  降档探测也失败：{msg[:80]}")
+            time.sleep(backoff)
     return last
 
 
@@ -189,6 +225,9 @@ def main():
                     help="探测用的近似 token 量（默认 15000）")
     ap.add_argument("--no-retry", action="store_true",
                     help="不重试 529 过载（调试用）")
+    ap.add_argument("--degrade-ladder", default="8000,3000,1000",
+                    help="529 过载时的**降档探针阶梯**（逗号分隔，默认 8000,3000,1000）。"
+                         "传空字符串则关闭降档。")
     args = ap.parse_args()
 
     print("=" * 60)
@@ -209,8 +248,10 @@ def main():
         print("\n【接下来的计划槽位】2 小时内无 agentTurn 任务 ✅")
 
     # ② 额度探测
+    ladder = [int(x) for x in (args.degrade_ladder or "").split(",") if x.strip().isdigit()]
     print(f"\n【额度探测】（~{args.probe_tokens} token 真实负载，不用小请求）")
-    ok, msg, dt = probe(args.probe_tokens, retries=1 if args.no_retry else 3)
+    ok, msg, dt = probe(args.probe_tokens, retries=1 if args.no_retry else 3,
+                        degrade_ladder=ladder)
     print(f"  {'✅' if ok else '❌'} {msg}")
 
     # ③ 结论
@@ -240,7 +281,11 @@ def main():
         print("    补跑和正事吃同一个额度桶，补跑可能把正事的口粮吃掉")
         print(f"    建议：等计划槽位跑完再补跑，或把补跑挪到 {max(s['in_min'] for s in imminent):.0f} 分钟之后")
     else:
-        print(" ✅ 结论：**可以跑** —— 额度够，且 1 小时内无计划槽位")
+        if "降档" in msg:
+            print(" ✅ 结论：**可以跑** —— 上游过载中，但**降档探测已通过**（通路恢复，额度未被证明不足）")
+            print("    建议：可以跑；若中途被限流掐死，等上游恢复后重跑即可（**不是额度问题，不用充值**）")
+        else:
+            print(" ✅ 结论：**可以跑** —— 额度够，且 1 小时内无计划槽位")
 
     print("=" * 60)
     return 1 if blocked else 0
