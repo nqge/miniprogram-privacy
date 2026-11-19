@@ -16,7 +16,7 @@
 ## 📍 当前状态（2026-11-19 11:00）
 
 **系统**：**32** 组断言 · **PASS=82 FAIL=0** WARN=5 等你=2（长期项，不计入 FAIL）· **0 个失败单元** · 7 个 systemd timer 全部按期
-**记忆**：L1 **79** 条（E1–E79）· 检索 **79/79** PASS · 索引 **816** 块 / **117** 文件 · `Embeddings: ready` · `Vector: ready`
+**记忆**：L1 **79** 条（E1–E79）· 检索 **79/79** PASS · 索引 **834** 块 / **118** 文件 · `Embeddings: ready` · `Vector: ready`
 **git**：工作区干净 · 远端已同步（SSH，`origin/master` = 本地）· 无未推送 commit
 **上游**：MiniMax 正常（11-19 巡检飞书 0.04s / GitHub 0.80s / 嵌入代理 0.00s）
 **闸门**：11-17 09:00–09:28 连跳 3 次（`upstream_busy`）→ 11-17 09:38 触发成功。
