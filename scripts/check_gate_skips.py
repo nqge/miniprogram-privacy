@@ -47,7 +47,17 @@ from pathlib import Path
 
 LOG_DIR = Path("/root/.openclaw/workspace/memory/healthcheck-logs")
 # 连续跳过多少次算「需要有人管」
+# ⚠️ 单位要说清楚：**3 条记录**，不是 3 天。
+#    阈值语义其实是「连续枯竭 3 天」—— 但只看条数会把
+#    「同一起事故被重试 3 遍」误判成「枯竭 3 天」（E78）。
+#    → 真正的判定还要过 SPAN_MIN_DAYS / SPAN_MIN_HOURS 两道跨度下限。
 FAIL_CONSECUTIVE = 3
+# ---- E78：跨度下限（把「次数」还原成「时长」）----
+# 连续跳过那一段必须**跨 ≥2 个自然日**，或首末条间隔 **>6 小时**，
+# 才算「持续枯竭」（可以占用额度告警名额）。
+# 同一天内的多次跳过 = 上游过载重试 → 只报 WARN，不占额度名额。
+SPAN_MIN_DAYS = 2
+SPAN_MIN_HOURS = 6
 # 最多读最近多少份日志
 MAX_LOGS = 14
 # 认哪些闸门（文件名前缀）
@@ -328,11 +338,53 @@ def judge(logs):
                     streak_reasons.append(reason)
         recovered = best_streak >= FAIL_CONSECUTIVE and consecutive < FAIL_CONSECUTIVE
 
+        # ⚠️ 2026-11-18（E78）：**次数必须换算成时长**。
+        #   只数条数 → 「同一起上游 529 被 timer 重试 3 遍」= 27 分钟，
+        #   却被当成「连续 3 天枯竭」→ 占用「该充值」的告警名额 → 信号稀释。
+        #   → 这里算出那段连续跳过的**首末时间戳 + 跨度**，
+        #     供下面判断「是持续枯竭，还是一次事故的重试」。
+        streak_span_days = 0
+        streak_span_hours = 0.0
+        streak_start_ts = None
+        streak_end_ts = None
+        if best_streak > 0 and best_end_idx >= 0:
+            seg = rows[best_end_idx - best_streak + 1: best_end_idx + 1]
+            streak_start_ts = seg[0][0]
+            streak_end_ts = seg[-1][0]
+            e0 = _ts_to_epoch(streak_start_ts)
+            e1 = _ts_to_epoch(streak_end_ts)
+            if e0 is not None and e1 is not None and e1 >= e0:
+                streak_span_hours = (e1 - e0) / 3600.0
+                # 自然日跨度：首末日期不同则至少跨 1 天；
+                # 要「≥2 个自然日」需要首末日期差 ≥1 天（end_date - start_date ≥ 1）
+                # ⚠️ ts 格式是 `YYYY-MM-DD-HHMMSS`（带连字符），不是 YYYYMMDD
+                d0 = streak_start_ts[:10].replace("-", "")   # YYYYMMDD
+                d1 = streak_end_ts[:10].replace("-", "")
+                try:
+                    import datetime
+                    dd0 = datetime.datetime.strptime(d0, "%Y%m%d").date()
+                    dd1 = datetime.datetime.strptime(d1, "%Y%m%d").date()
+                    streak_span_days = (dd1 - dd0).days + 1
+                except Exception:
+                    streak_span_days = 0
+
+        # 达到条数阈值 **且** 跨度够长 → 才是「持续枯竭」
+        span_ok = (streak_span_days >= SPAN_MIN_DAYS) or (streak_span_hours > SPAN_MIN_HOURS)
+        sustained = best_streak >= FAIL_CONSECUTIVE and span_ok
+        # 条数够但跨度不够 → 一次事故的重试，不是持续枯竭
+        retry_only = best_streak >= FAIL_CONSECUTIVE and not span_ok
+
         detail[name] = {
             "n_logs": len(rows),
             "consecutive_skipped": consecutive,
             "best_streak": best_streak,
             "best_streak_end_ts": rows[best_end_idx][0] if best_end_idx >= 0 else None,
+            "best_streak_start_ts": streak_start_ts,
+            "streak_span_days": streak_span_days,
+            "streak_span_hours": round(streak_span_hours, 2),
+            "span_ok": span_ok,
+            "sustained": sustained,
+            "retry_only": retry_only,
             "recovered": recovered,
             "last_result": rows[-1][1],
             "last_ts": rows[-1][0],
@@ -353,7 +405,7 @@ def judge(logs):
         uniq = sorted(set(streak_reasons or reasons))
         all_quota = bool(uniq) and all(r == "quota" for r in uniq)
         any_quota = "quota" in uniq
-        if best_streak >= FAIL_CONSECUTIVE:
+        if sustained:
             if all_quota:
                 why = "额度长期枯竭，需要充值（E74）"
             elif any_quota:
@@ -378,13 +430,29 @@ def judge(logs):
                 # 措辞要区分：**已经恢复了**，但历史里有一段连续跳过
                 problems.append(
                     f"{name} 最近曾连续 {best_streak} 次被闸门跳过"
-                    f"（截至 {detail[name]['best_streak_end_ts']}，现已恢复）"
+                    f"（{streak_start_ts} → {streak_end_ts}，"
+                    f"跨 {streak_span_days} 天/{streak_span_hours}小时，"
+                    f"截至 {detail[name]['best_streak_end_ts']}，现已恢复）"
                     f" -- {why}")
             else:
                 problems.append(
                     f"{name} 最近连续 {consecutive} 次被闸门跳过"
                     f"-- 最后一次 {rows[-1][0]}，已连续跳过 {consecutive} 次；{why}"
                 )
+        elif retry_only:
+            # ⚠️ E78：条数够但**跨度不够** → 这不是持续枯竭，
+            #   是一次事故被 timer 重试了 N 遍 → 只报 WARN，**不占用额度告警名额**。
+            #   措辞必须把**首末时间戳**打出来（E78 教训③），
+            #   让读的人一眼看出这是「27 分钟」还是「3 天」。
+            rs = ",".join(sorted(set(streak_reasons)))
+            span_desc = (f"{streak_start_ts} → {streak_end_ts}"
+                         f"（仅 {round(streak_span_hours, 2)} 小时 / "
+                         f"{streak_span_days} 个自然日）")
+            warns.append(
+                f"{name} 曾连续 {best_streak} 次被闸门跳过，但**跨度仅 {span_desc}**"
+                f" → 这是**一次事故的重试**，不是持续枯竭，不占用额度告警名额（E78）"
+                + (f"；原因 {rs}" if rs else "")
+            )
         elif best_streak >= 2:
             # 曾经连续跳过 2 次（不到阈值），但**已经恢复** → 值得提一句
             rs = ",".join(sorted(set(streak_reasons))) if streak_reasons else "未记录"
@@ -416,6 +484,41 @@ def self_test() -> int:
     p, w, d = judge(logs)
     assert p, "连续 3 次跳过应 FAIL"
     assert "连续 3 次" in p[0], p[0]
+    # E78：这条必须是「持续枯竭」（跨度够）而不是「一次事故的重试」
+    dd = d["daily-learning-gate"]
+    assert dd["sustained"] is True, dd
+    assert dd["span_ok"] is True, dd
+    assert dd["streak_span_days"] >= SPAN_MIN_DAYS, dd
+
+    # 2b) ⚠️ **E78 核心用例**：条数够但跨度不够 → 只报 WARN，**不占额度名额**
+    #     这三条是**同一天早上、27 分钟内**的 3 次重试（真实翻车数据）。
+    #     旧实现会把它当成「连续 3 天枯竭」→ 占用额度告警名额。
+    logs_retry = [
+        ("daily-learning-gate", "2026-11-17-090152", "skipped"),
+        ("daily-learning-gate", "2026-11-17-092039", "skipped"),
+        ("daily-learning-gate", "2026-11-17-092823", "skipped"),
+    ]
+    pr, wr, dr = judge(logs_retry)
+    assert not pr, f"27 分钟内的 3 次重试**不应**占用额度告警名额: {pr}"
+    assert wr, "同一天内的重试应给 WARN"
+    drr = dr["daily-learning-gate"]
+    assert drr["best_streak"] == 3, drr
+    assert drr["sustained"] is False, drr
+    assert drr["retry_only"] is True, drr
+    assert drr["span_ok"] is False, drr
+    # 措辞必须把首末时间戳打出来（E78 教训③）
+    assert "2026-11-17-090152" in wr[0] and "2026-11-17-092823" in wr[0], wr[0]
+    assert "E78" in wr[0], wr[0]
+
+    # 2c) 跨度刚过 6 小时线 → 算持续（阈值另一条路径）
+    logs_span_ok = [
+        ("daily-learning-gate", "2026-11-16-090000", "skipped"),
+        ("daily-learning-gate", "2026-11-16-160000", "skipped"),
+        ("daily-learning-gate", "2026-11-16-170000", "skipped"),
+    ]
+    ps, ws, ds = judge(logs_span_ok)
+    assert ps, f"首末间隔 >6 小时应算持续枯竭: {ps}"
+    assert ds["daily-learning-gate"]["span_ok"] is True, ds
 
     # 3) 中间断一个 ok → 不算连续 → 不 FAIL
     logs2 = [
