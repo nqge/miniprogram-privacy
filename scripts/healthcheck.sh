@@ -2939,6 +2939,135 @@ while IFS= read -r line; do
 done <<< "$cont_report"
 PASS=$((PASS + 1))
 
+# ── V2. 「待落地」标记扫描（2026-11-19 新增，E78/E79/P13 的落地保障）──
+#
+# ⚠️ 为什么需要这一组（真实教训链）：
+#   · 11-18 写了 L1 E78（判据要加跨度下限），**判据代码一行没改**，
+#     假信号又报了一天（→ E78 + P13）。
+#   · 11-19 09:00 写了 L1 E79，同样只标了「修法（还没做）」。
+#   · 11-19 10:05 心跳把它做掉了 —— **靠的是「偶然发现」**（我读到了旧措辞不对劲），
+#     **不是靠机制**。
+#   → 「带标记」是必要的，但**不够**：必须有一个**专门扫它**的东西，
+#     否则下一个「待落地」还会躺到下一个会话。
+#
+# 判据：扫 L1 条目 + SESSION-STATE + 今日笔记里
+#   「修法（还没做）」/「尚未修改」/「待落地」这类**明确的未完成声明**。
+#   若这些声明出现在**今天之前**写的文件里 → 说明躺过了 ≥1 天 → WARN。
+#
+# 为什么用 WARN 不用 FAIL：
+#   「今天刚写、正在改」是**正常状态**（09:00 写、10:05 做，中间 1 小时）。
+#   判 FAIL 会天天误报。只有**跨天**的未完成声明才是问题。
+echo ""
+echo "【V2】「待落地」标记扫描（E78/E79/P13 的落地保障）"
+
+pending_report=$(python3 - << 'PY' 2>/dev/null
+import os, re, datetime
+WS = '/root/.openclaw/workspace'
+TODAY = datetime.date.today()
+
+# 未完成声明的特征词 —— 都是**明确语义**，不会误伤普通叙述
+#
+# ⚠️ 误伤排除（2026-11-19 实测，第一版把 E52 和 2026-10-22 也报出来了）：
+#   「未落地」在普通叙述里指的是「某机制**从来没有**存在过」
+#   （E52 的「未落地（需定夺）」、10-22 的「安全校验基线从未落地」）
+#   → 那是**对过去的陈述**，不是**对未来的承诺**。
+#   → 所以要排除「从未落地」「未落地（需定夺）」「未落地（未实现）」
+#     这类**描述既有事实**的用法，只保留**明确的待办承诺**。
+PENDING_PAT = re.compile(
+    r'修法（?还没做）?|尚未修改|待落地（?(?:未实现)?）?|尚未补|还没改|尚未落地')
+# 这些是「描述既有事实」而非「承诺要修」→ 命中即忽略
+FALSE_POS_PAT = re.compile(
+    r'从未落地|未落地（需定夺）|未落地（未实现）|未落地（本来）')
+
+# 标记「已完成」的词 —— 出现即视为已解决
+DONE_PAT = re.compile(r'✅\s*落地状态|已落地|修法（已做）|已修复')
+
+# 只扫这些文件：L1 条目 + 状态文件 + 近期每日笔记
+targets = []
+l1_dir = os.path.join(WS, 'memory', 'L1-entries')
+if os.path.isdir(l1_dir):
+    for fn in sorted(os.listdir(l1_dir)):
+        if fn.endswith('.md'):
+            targets.append(os.path.join(l1_dir, fn))
+for rel in ('SESSION-STATE.md', 'proactive-tracker.md'):
+    fp = os.path.join(WS, rel)
+    if os.path.exists(fp):
+        targets.append(fp)
+notes_dir = os.path.join(WS, 'memory')
+if os.path.isdir(notes_dir):
+    for fn in sorted(os.listdir(notes_dir)):
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}\.md', fn):
+            targets.append(os.path.join(notes_dir, fn))
+
+pending = []
+for fp in targets:
+    try:
+        s = open(fp, encoding='utf-8', errors='replace').read()
+    except Exception:
+        continue
+    if not PENDING_PAT.search(s):
+        continue
+    # 逐个匹配点过滤「描述既有事实」的误伤用法
+    # ⚠️ 误伤陷阱（2026-11-19 实测）：过滤时**只能看匹配点之前**的文本 ——
+    #   `待落地（未实现）` 本身包含子串 `未落地（未实现）`，
+    #   若把匹配文本一起丢进窗口 → 自己把自己判成误伤 → 断言装死。
+    real_pending = []
+    for m in PENDING_PAT.finditer(s):
+        before = s[max(0, m.start() - 12):m.start()]
+        if FALSE_POS_PAT.search(before):
+            continue
+        real_pending.append(m)
+    if not real_pending:
+        continue
+    # ⚠️ 「已解决」判定必须**逐个匹配点**看，不能整篇一刀切 ——
+    #   故障注入实测：文件开头有未完成声明，后面又有「✅ 落地状态」段
+    #   → 整篇一刀切会认为「整条都解决了」→ **断言装死**。
+    #   → 正确做法：对每个未完成声明，看**它自己所在的段落**
+    #     （到下一个标题为止）里有没有「已解决」标记。
+    def _resolved_at(pos: int) -> bool:
+        # 取本段：从 pos 往回找最近的一个标题行，往前找下一个标题行
+        head = s.rfind("\n#", 0, pos)
+        head = 0 if head < 0 else head + 1
+        nxt = s.find("\n#", pos)
+        nxt = len(s) if nxt < 0 else nxt
+        section = s[head:nxt]
+        md = DONE_PAT.search(section)
+        return bool(md)
+    unresolved = [m for m in real_pending if not _resolved_at(m.start())]
+    if not unresolved:
+        continue
+    m_pend = unresolved[0]
+    # 文件的日期（每日笔记用文件名；L1 用 mtime 兜底）
+    rel = os.path.relpath(fp, WS)
+    m = re.search(r'(\d{4}-\d{2}-\d{2})', os.path.basename(fp))
+    if m:
+        d = datetime.date.fromisoformat(m.group(1))
+    else:
+        d = datetime.date.fromtimestamp(os.path.getmtime(fp))
+    age = (TODAY - d).days
+    if age >= 1:      # 跨天仍未落地 → 提醒
+        pending.append((rel, age))
+
+if pending:
+    for rel, age in pending:
+        print(f"WARN {rel} 仍带「修法（还没做）」类未完成声明（{age} 天前写的）"
+              f" → 判据可能还没改：条目写完 ≠ 修好了（P13）；"
+              f"要么今天落地，要么把标记改成「已落地」（E78/E79）")
+else:
+    print("PASS 没有跨天未落地的「待落地」声明")
+
+print(f"__PENDING_FAILED__=0")
+PY
+)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) warn "${line#WARN }" ;;
+  esac
+done <<< "$pending_report"
+PASS=$((PASS + 1))
+
 echo "【M】Provider 韧性与 fallback 有效性"
 
 # 2026-10-26 实测:19:11 和 19:42 两次巡检 FAIL,根因是 MiniMax

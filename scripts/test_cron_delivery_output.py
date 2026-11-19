@@ -245,6 +245,75 @@ def main():
         none_safe = True
     cases.append((none_safe, "遇到异常元素不应静默返回错误结果"))
 
+    # ══════════════════════════════════════════════════════════════
+    # 9. 【E79】次数和天数必须来自**同一段**
+    #    背景（2026-11-19 实测）：
+    #      旧写法：`consec = _max_consecutive_errors_history(runs)`（**最长段**的次数）
+    #                `span_days = _outage_span_days(runs)`        （**最近段**的天数）
+    #      → 两个数字**指向不同的段** → 拼出「5 次（约 11 天），
+    #        而那 5 次其实只跨 4 天」这种事实正确、整体荒谬的消息。
+    #    修法：天数也从「最长段本身」量（`_max_consecutive_errors_segment`）。
+    # ══════════════════════════════════════════════════════════════
+
+    # 9.1 造数据：早期长段（5 次跨 4 天）+ 近期短段（2 次跨 1 天）
+    #     runs 是**倒序**（最新在前）—— 真身代码就是这么用的。
+    DAY = 86400000
+    T = 1767225600000   # 2026-01-01 00:00:00 UTC，固定基准避免依赖「现在」
+
+    def _run(ms, status):
+        return {"runAtMs": ms, "status": status}
+
+    # 近期短段（最新）：T+40 天、+41 天，两次 error；再往前一次 ok
+    runs_mixed = [
+        _run(T + 41 * DAY, "error"),
+        _run(T + 40 * DAY, "error"),
+        _run(T + 39 * DAY, "ok"),
+        # 早期长段：5 次 error，跨 4 天（+30 ~ +34）
+        _run(T + 34 * DAY, "error"),
+        _run(T + 33 * DAY, "error"),
+        _run(T + 32 * DAY, "error"),
+        _run(T + 31 * DAY, "error"),
+        _run(T + 30 * DAY, "error"),
+        _run(T + 29 * DAY, "ok"),
+    ]
+
+    seg = ccd._max_consecutive_errors_segment(runs_mixed)
+    cases.append((seg["count"] == 5, "E79: 最长段次数应为 5（早期长段，不是近期短段）"))
+    cases.append((seg["first_ms"] == T + 30 * DAY and seg["last_ms"] == T + 34 * DAY,
+                  "E79: 最长段的首末时间戳应取自那一段本身"))
+
+    # 9.2 ⭐ 核心断言：天数必须等于**那一段自己的跨度**，不是别的段的值
+    span_seg = ccd._segment_span_days(seg)
+    # 早期长段跨 4 天（+30~+34），段前成功在 +29 → (34−29)=5 → 约 5 天
+    # ⚠️ 关键：旧写法会给出「最近段」的跨度（+41−+39=2 → 2 天），
+    #    报告就会变成「连续失败 5 次（约 2 天）」—— 次数和天数互相打架。
+    cases.append((span_seg == 5,
+                  f"E79: 天数必须取自最长段自身的跨度（应≈5），实际 {span_seg}"))
+    cases.append((span_seg != 2,
+                  "E79: 天数不应取自「最近段」的跨度（2 天）—— 那正是 E79 的病灶"))
+
+    # 9.3 ⭐ 故障注入：旧写法会给出什么？（证明这个用例真的能抓住 bug）
+    old_span = ccd._outage_span_days(runs_mixed)
+    cases.append((old_span != span_seg,
+                  f"E79: 旧写法（_outage_span_days）与新写法结果应当不同"
+                  f"（旧={old_span} 新={span_seg}），相同则说明本用例抓不住 bug"))
+
+    # 9.4 只有一段时，两个函数应当一致（回归保护：别把对的也改坏了）
+    runs_single = [
+        _run(T + 3 * DAY, "error"),
+        _run(T + 2 * DAY, "error"),
+        _run(T + 1 * DAY, "error"),
+        _run(T, "ok"),
+    ]
+    seg1 = ccd._max_consecutive_errors_segment(runs_single)
+    cases.append((ccd._segment_span_days(seg1) == ccd._outage_span_days(runs_single),
+                  "E79: 只有一段时，新旧算法应一致（回归保护）"))
+
+    # 9.5 空输入 / 无失败段 → 不该炸，且返回 0
+    cases.append((ccd._segment_span_days({}) == 0, "E79: 空段应返回 0 天"))
+    cases.append((ccd._segment_span_days(ccd._max_consecutive_errors_segment([])) == 0,
+                  "E79: 空 runs 应返回 0 天"))
+
     failed = 0
     for ok, name in cases:
         if ok:

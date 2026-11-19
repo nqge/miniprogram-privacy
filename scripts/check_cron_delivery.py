@@ -157,6 +157,11 @@ def _max_consecutive_errors_history(runs):
     用途：给「历史上曾连续失败 N 次（现已恢复）」那条 WARN 提供数字 ——
     **当前段**归 `_max_consecutive_errors()` 管，**历史段**归这里管，
     两个数字不再互相串味（2026-11-17 实测的 bug 就是它们串了）。
+
+    ⚠️ E79（2026-11-19 实测）：**只返回次数是不够的** ——
+    次数必须和「天数」来自**同一段**，否则会拼出事实正确、整体荒谬的消息。
+    → 这里额外提供 `_max_consecutive_errors_segment()`，
+      返回**那一段本身**（含首末时间戳），供天数也从同一段取。
     """
     best = 0
     cur = 0
@@ -167,6 +172,97 @@ def _max_consecutive_errors_history(runs):
         else:
             cur = 0
     return best
+
+
+def _max_consecutive_errors_segment(runs):
+    """返回窗口内**历史上最长**的那段连续失败**本身**。
+
+    返回 dict：
+      `count`      —— 这段有多少次失败
+      `first_ms`   —— 这段里**最旧**一次失败的时间戳
+      `last_ms`    —— 这段里**最新**一次失败的时间戳
+      `has_success_before` —— 这段之前是否还有一次成功（有的话跨度才「有界」）
+
+    ⚠️ 为什么需要它（E79）：
+    `_max_consecutive_errors_history()` 给出「最长段的**次数**」，
+    `_outage_span_days()` 给出「**最近段**的天数」——
+    两者**指向不同的段**，拼出来的话就是假的。
+    → 报一句话之前，**所有数字必须来自同一段**。
+    """
+    best = 0
+    cur = 0
+    # ⚠️ runs 是**倒序**（最新在前）→ 一段连续失败里，
+    #   **第一个遇到的 error 是这段最新的一次**，之后遇到的**越来越旧**。
+    #   → 段末 = 第一个 error；段首 = 这段的**最后一个** error。
+    #   （别和「段首/段末」的直觉反着写 —— 这里容易搞反，
+    #     2026-11-19 实测就因此把 first/last 装反了。）
+    seg_head = None      # 当前段的**最新**一次失败（段的第一个 error）
+    seg_tail = None      # 当前段的**最旧**一次失败（段的最后一个 error）
+    best_head = None
+    best_tail = None
+    best_ok_before = None
+    newest_ms = None
+
+    for idx, r in enumerate(runs):
+        ms = r.get("runAtMs")
+        if idx == 0:
+            newest_ms = ms
+        if r.get("status") == "error":
+            if cur == 0:
+                seg_head = ms       # 新的一段 → 第一个 error = 最新
+            seg_tail = ms          # 每遇到一次就更旧 → 最后一次 = 最旧
+            cur += 1
+            if cur > best:
+                best = cur
+                best_head = seg_head
+                best_tail = seg_tail
+                # 这段之前（更旧的）是否有成功？runs 是**倒序**（最新在前），
+                # 所以「更旧」= 更大的 idx
+                best_ok_before = None
+                for x in runs[idx + 1:]:
+                    if x.get("status") != "error":
+                        best_ok_before = x.get("runAtMs")
+                        break
+        else:
+            cur = 0
+            seg_head = None
+            seg_tail = None
+
+    return {
+        "count": best,
+        "first_ms": best_tail,     # 段首 = 最旧一次
+        "last_ms": best_head,      # 段末 = 最新一次
+        "success_before_ms": best_ok_before,
+        "has_success_before": best_ok_before is not None,
+        "newest_ms": newest_ms,
+    }
+
+
+def _segment_span_days(seg):
+    """算**指定段**的持续天数（按日历天算）。
+
+    ⚠️ E79：这个函数存在的意义就是**替代**「拿另一个段的天数来配这段的次数」。
+    段内首末的跨度 = (最后一次失败 − 段前最后一次成功)，
+    与 `_outage_span_days` 的算法一致，但**只针对传入的这一段**。
+
+    没有「段前成功」时（全程都在挂）→ 用「最早一次失败 → 现在」。
+    """
+    if not seg or seg.get("count", 0) <= 0:
+        return 0
+    first_ms = seg.get("first_ms")
+    last_ms = seg.get("last_ms")
+    if not isinstance(first_ms, (int, float)) or not isinstance(last_ms, (int, float)):
+        return 0
+    if seg.get("has_success_before"):
+        # 段前那次成功的时间戳 —— 由调用方通过 runs 找不到时，退化为段内跨度
+        ok_ms = seg.get("success_before_ms")
+        if isinstance(ok_ms, (int, float)):
+            return max(1, round((last_ms - ok_ms) / 86400000))
+    # 全程都在挂 → 用「最早一次失败到现在」
+    newest = seg.get("newest_ms")
+    if isinstance(newest, (int, float)):
+        return max(1, round((newest - first_ms) / 86400000) + 1)
+    return max(1, round((last_ms - first_ms) / 86400000) + 1)
 
 
 def _outage_span_days(runs):
@@ -489,8 +585,21 @@ def main() -> int:
                 #   → 必须用**历史段**的函数；用「当前段」的话，
                 #     任务一恢复当前段就是 0 → 这条 WARN 会**永远不报**。
                 consec = _max_consecutive_errors_history(runs)
-                # 持续中断了几天（按日历天算，不是次数）
-                span_days = _outage_span_days(runs)
+                # ⚠️ E79（2026-11-19 实测）：**次数和天数必须来自同一段**。
+                #   旧写法：次数取「窗口内最长段」，天数取「最近段」——
+                #   两者**指向不同的段**，拼出的话事实正确、整体荒谬
+                #   （例：5 次跨 4 天，却报「约 11 天」）。
+                #   → 改用「最长段本身」，天数也从**那一段**量。
+                seg = _max_consecutive_errors_segment(runs)
+                span_days = _segment_span_days(seg)
+                # 段的首末时间戳 —— 报告里带上，读的人能自己核对跨度
+                seg_from = seg.get("first_ms")
+                seg_to = seg.get("last_ms")
+                seg_ts = ""
+                if isinstance(seg_from, (int, float)) and isinstance(seg_to, (int, float)):
+                    fmt = "%Y-%m-%d %H:%M"
+                    seg_ts = (f"{datetime.datetime.fromtimestamp(seg_from / 1000).strftime(fmt)}"
+                              f" → {datetime.datetime.fromtimestamp(seg_to / 1000).strftime(fmt)}")
                 # ⚠️ E71：上面（run_status != "ok" 分支）如果已经报了
                 #    「连续失败 N 次，已中断 N 天」这条 FAIL，
                 #    这里**不要**再报一遍同样的事实 —— 同一个任务出现两次
@@ -505,6 +614,7 @@ def main() -> int:
                         print(
                             f"WARN {name} 历史上曾连续失败 {consec} 次"
                             f"（约 {span_days} 天，现已恢复）"
+                            + (f" —— 该段 {seg_ts}" if seg_ts else "")
                         )
                     # 现在还挂着 → 上面已报 FAIL，这里不重复
                 elif consec >= 2:
