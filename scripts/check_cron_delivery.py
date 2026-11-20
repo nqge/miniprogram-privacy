@@ -238,6 +238,31 @@ def _max_consecutive_errors_segment(runs):
     }
 
 
+def _segment_runs(runs, seg):
+    """返回**最长段本身**包含的那几条 run 记录（E65 落地用）。
+
+    ⚠️ 为什么不能直接用整个窗口的 run 来分组：
+      错误类型分组必须和「连续 N 次」指向**同一段**（E79 的教训）。
+      窗口里可能有别的、零散的失败 —— 把它们混进来分组，
+      就会算出「这段是额度耗尽」而实际上是别的错。
+    """
+    if not seg or seg.get("count", 0) <= 0:
+        return []
+    first_ms = seg.get("first_ms")
+    last_ms = seg.get("last_ms")
+    if not isinstance(first_ms, (int, float)) or not isinstance(last_ms, (int, float)):
+        return []
+    lo, hi = min(first_ms, last_ms), max(first_ms, last_ms)
+    out = []
+    for r in runs or []:
+        if r.get("status") != "error":
+            continue
+        ms = r.get("runAtMs")
+        if isinstance(ms, (int, float)) and lo <= ms <= hi:
+            out.append(r)
+    return out
+
+
 def _segment_span_days(seg):
     """算**指定段**的持续天数（按日历天算）。
 
@@ -366,6 +391,188 @@ def _is_quota_exhausted(err: str) -> bool:
         # 单模型失败但明说限流：可能是每分钟抖动，**不算**额度耗尽
         return False
     return False
+
+
+# ── E65 落地（2026-11-20）：失败计数要**按错误类型分组** + **按调度频率换算时间窗** ──
+#
+# 背景：E65 指出「连续 N 次失败」是个**丢了维度**的聚合值 ——
+#   ① 不知道每次失败是不是**同一个原因**（额度耗尽 vs 脚本 bug 差了两个数量级）
+#   ② 不知道 job **多久跑一次**（每天 1 次 vs 每小时 1 次，同样 6 次含义差 100 倍）
+# → 同一个「连续 6 次」既可能是「周频 job 撞了 6 周同一个已修好的 bug」，
+#   也可能是「每天跑的 job 挂了 6 天」，**数字上完全无法区分**。
+#
+# 修法：**给判据补维度** —— 把错误类型分组 + 把时间窗换算出来，
+#      而不是把这条 WARN 删掉（删 WARN = 把信号源也删了）。
+
+
+def _classify_run_error(err: str) -> str:
+    """把一次失败的**错误文本**归到一个**错误类型**桶里。
+
+    返回值是给人看的短标签（会出现在报告里），例如：
+      "额度耗尽" / "接口限流" / "执行超时" / "脚本报错" / "网络错误" / "未知"
+
+    ⚠️ 与 `_is_quota_exhausted` 的区别：
+      - `_is_quota_exhausted` 是**布尔判据**（要不要让牛哥哥充值），
+        它故意「认特征不认字面量」，宁可宽松。
+      - 这里需要的是**分组**，目的是让「连续 N 次」能拆成
+        「其中 4 次额度耗尽 + 2 次脚本报错」——
+        如果按「额度耗尽 vs 其他」二分，粒度太粗，仍然分不出
+        「同一个原因重复 N 次」和「N 次不同原因」。
+
+    → 所以这里**先按具体根因分**，分不出来的才落到宽泛桶。
+    """
+    if not err:
+        return "未知"
+    low = err.lower()
+
+    # 额度类：Token Plan 用量上限 / 账号级额度耗尽（全部候选模型同时挂）
+    if "token plan" in low or _is_quota_exhausted(err):
+        return "额度耗尽"
+    # 接口限流（单模型/局部限流，不是账号级）
+    if "rate limit" in low or "rate_limit" in low or "429" in low:
+        return "接口限流"
+    # 超时
+    if "timed out" in low or "timeout" in low or "etimedout" in low:
+        return "执行超时"
+    # 配额（quota，但不是 rate limit 措辞）
+    if "quota" in low or "用量上限" in err or "限额" in err:
+        return "配额不足"
+    # 网络类
+    if any(k in low for k in ("econnrefused", "enotfound", "econnreset",
+                              "socket hang up", "network", "getaddrinfo")):
+        return "网络错误"
+    # 上下文/参数类（脚本自身逻辑问题 —— 这一类才是「我现在就该修」）
+    if any(k in low for k in ("is not defined", "nameerror", "syntaxerror",
+                              "traceback", "modulenotfounderror", "keyerror")):
+        return "脚本报错"
+    # 上下文过长 —— 与额度同源但根因不同
+    if "context" in low and ("length" in low or "too long" in low or "exceed" in low):
+        return "上下文超长"
+    if "context" in low and "window" in low:
+        return "上下文超长"
+    return "其他"
+
+
+def _cron_expr_window_days(expr: str) -> float:
+    """按 **cron 表达式**估算这个 job **多久跑一次**（天/次）。
+
+    E65 的第二个维度：**同样「连续 N 次」，跨度可能差两个数量级**。
+      - `0 9 * * *`   → 每天一次 → 连续 6 次 ≈ 6 天
+      - `0 7 * * 0`   → 每周一次 → 连续 6 次 ≈ 42 天
+      - `*/30 * * * *` → 每半小时一次 → 连续 6 次 ≈ 3 小时
+
+    → 只取**常见调度形态**；认不出来的返回 0（调用方回退到「按日历天算」）。
+
+    ⚠️ 这里返回的是**平均间隔**（天），不是精确日历跨度 ——
+      精确跨度由 `_segment_span_days()` 从**实际时间戳**算（那个更准）。
+      本函数的用途是给「次数」配一个**量纲对照**，
+      让人一眼看出「6 次」在时间上意味着什么。
+    """
+    if not expr:
+        return 0.0
+    parts = expr.split()
+    if len(parts) != 5:
+        return 0.0
+    minute, hour, dom, month, dow = parts
+
+    # 每分钟 / 每 N 分钟
+    if minute.startswith("*/"):
+        try:
+            step = int(minute[2:])
+        except ValueError:
+            step = 1
+        if hour == "*" and dom == "*" and month == "*" and dow == "*":
+            return step / 1440.0
+        return step / 1440.0
+
+    # 每小时 / 每 N 小时
+    if minute.isdigit() and hour.startswith("*/"):
+        try:
+            step = int(hour[2:])
+        except ValueError:
+            step = 1
+        if dom == "*" and month == "*" and dow == "*":
+            return step / 24.0
+        return step / 24.0
+
+    # 每天固定时刻
+    if minute.isdigit() and hour.isdigit() and dom == "*" and month == "*" and dow == "*":
+        return 1.0
+
+    # 每 N 天（同一时刻）
+    if minute.isdigit() and hour.isdigit() and dom.startswith("*/") and month == "*" and dow == "*":
+        try:
+            step = int(dom[2:])
+        except ValueError:
+            step = 1
+        return float(step)
+
+    # 每周固定星期几
+    if minute.isdigit() and hour.isdigit() and dom == "*" and month == "*" and dow != "*":
+        days = set()
+        for d in dow.split(","):
+            d = d.strip()
+            if d.isdigit():
+                days.add(int(d))
+            elif d in ("7", "0"):
+                days.add(0)
+        # dow 里 0 和 7 都表示周日，去重后算「每周跑几次」
+        n_per_week = len(days) if days else 1
+        if n_per_week == 0:
+            n_per_week = 1
+        return 7.0 / n_per_week
+
+    # 每月的某几天（不常见 → 保守给 30 天）
+    if minute.isdigit() and hour.isdigit() and dom != "*" and dow == "*":
+        return 30.0
+
+    return 0.0
+
+
+def _group_errors_by_type(runs) -> dict:
+    """把一批 run 记录**按错误类型分组**，返回 {类型: [run, ...]}。
+
+    只统计 `status == "error"` 的 run（成功的没有错误类型）。
+    """
+    groups = {}
+    for r in runs or []:
+        if r.get("status") != "error":
+            continue
+        kind = _classify_run_error(str(r.get("error") or ""))
+        groups.setdefault(kind, []).append(r)
+    return groups
+
+
+def _window_desc(runs, job) -> str:
+    """把「最近 N 次运行」这个**窗口**换算成**真实时间跨度**（E65 落地）。
+
+    返回形如：
+      "该窗口实际约 19 天（2026-11-01 → 2026-11-20），调度 0 9 * * *（日频）"
+
+    ⚠️ 为什么两个数字都要：
+      - **实际跨度**从**时间戳**算 —— 这是事实。
+      - **调度频率**说明这个 job 本来该多久跑一次 —— 用来判断
+        「N 次里失败 M 次」的密度是不是异常。
+    """
+    if not runs:
+        return ""
+    times = [r.get("runAtMs") for r in runs if isinstance(r.get("runAtMs"), (int, float))]
+    if not times:
+        return ""
+    newest, oldest = max(times), min(times)
+    days = max(1, round((newest - oldest) / 86400000) + 1)
+    fmt = "%Y-%m-%d"
+    ts_desc = (f"{datetime.datetime.fromtimestamp(oldest / 1000).strftime(fmt)}"
+               f" → {datetime.datetime.fromtimestamp(newest / 1000).strftime(fmt)}")
+
+    sched = (job or {}).get("schedule") or {}
+    expr = sched.get("expr") if isinstance(sched, dict) else ""
+    per_days = _cron_expr_window_days(expr)
+    if per_days > 0:
+        freq = f"（约每 {per_days:g} 天跑一次）"
+    else:
+        freq = "（调度频率未识别）"
+    return f"该窗口实际约 {days} 天（{ts_desc}），调度 {expr or '未知'}{freq}"
 
 
 def _load_history(env, job_id, limit=20):
@@ -611,22 +818,84 @@ def main() -> int:
                 #     但「曾经连续挂过 N 天」这个事实值得留痕 → WARN
                 if consec >= 3:
                     if run_status == "ok":
+                        # ── E65 落地（2026-11-20）：给这个「次数」补上缺失的两个维度 ──
+                        #
+                        # 旧写法：`历史上曾连续失败 {consec} 次（约 {span_days} 天，现已恢复）`
+                        # → 这句话**丢掉了两个维度**：
+                        #   ① 每次失败是不是**同一个原因**（额度耗尽 vs 脚本 bug 差两个数量级）
+                        #   ② job **多久跑一次**（周频的「6 次」= 42 天，日频的「6 次」= 6 天）
+                        # → 同一个「6 次」在数字上无法区分「同一原因重复」与「不同原因连发」。
+                        #
+                        # 现在补上：
+                        #   · 按**错误类型分组**（分组只针对**这一段**，不混入窗口里别的失败）
+                        #   · 按**调度频率**换算时间窗（cron 表达式 → 每次间隔）
+                        #   · 保留**最近一次的真实状态**（run_status），永远显示
+                        seg_runs = _segment_runs(runs, seg)
+                        by_type = _group_errors_by_type(seg_runs)
+                        if by_type:
+                            type_desc = "、".join(
+                                f"{k}×{len(v)}" for k, v in
+                                sorted(by_type.items(), key=lambda kv: -len(kv[1]))
+                            )
+                        else:
+                            type_desc = "原因未知"
+
+                        # 调度频率 → 这个 job 的真实节奏
+                        sched = j.get("schedule") or {}
+                        expr = sched.get("expr") if isinstance(sched, dict) else ""
+                        per_days = _cron_expr_window_days(expr)
+                        if per_days > 0:
+                            expected = round(consec * per_days, 1)
+                            freq_desc = (f"{expr}（约每 {per_days:g} 天跑一次）"
+                                         f" → 这 {consec} 次按调度约合 {expected:g} 天")
+                        else:
+                            freq_desc = (f"{expr}" if expr else "调度表达式未识别")
+
                         print(
                             f"WARN {name} 历史上曾连续失败 {consec} 次"
-                            f"（约 {span_days} 天，现已恢复）"
+                            f"（实际跨度约 {span_days} 天，现已恢复）"
                             + (f" —— 该段 {seg_ts}" if seg_ts else "")
+                            + f" —— 错误类型：{type_desc}"
+                            + f" —— 调度：{freq_desc}"
+                            + f" —— 最近一次状态：{run_status}"
                         )
                     # 现在还挂着 → 上面已报 FAIL，这里不重复
                 elif consec >= 2:
+                    # ── E65 落地：零散失败同样缺「调度频率」这一维 ──
+                    # 「最近 20 次里有 3 次 error」—— 20 次是**多少天**？
+                    # 日频 job 的 20 次 = 20 天；周频 job 的 20 次 = 140 天。
+                    # 不换算的话，读的人只能靠猜。
+                    win_desc = _window_desc(runs, j)
+                    all_by_type = _group_errors_by_type(error_runs)
+                    if all_by_type:
+                        type_desc = "、".join(
+                            f"{k}×{len(v)}" for k, v in
+                            sorted(all_by_type.items(), key=lambda kv: -len(kv[1]))
+                        )
+                    else:
+                        type_desc = "原因未知"
                     print(
                         f"WARN {name} 最近 {len(runs)} 次里有 {len(error_runs)} 次 error"
                         f"，其中最多【连续 {consec} 次】失败（最近一次正常）："
                         f"{', '.join(err_ts)}"
+                        + (f" —— {win_desc}" if win_desc else "")
+                        + f" —— 错误类型：{type_desc}"
                     )
                 else:
+                    win_desc = _window_desc(runs, j)
+                    all_by_type = _group_errors_by_type(error_runs)
+                    if all_by_type:
+                        type_desc = "、".join(
+                            f"{k}×{len(v)}" for k, v in
+                            sorted(all_by_type.items(), key=lambda kv: -len(kv[1]))
+                        )
+                    else:
+                        type_desc = "原因未知"
                     print(
                         f"WARN {name} 最近 {len(runs)} 次里有 {len(error_runs)} 次 error"
                         f"（最近一次正常）：{', '.join(err_ts)}"
+                        + (f" —— {win_desc}" if win_desc else "")
+                        + f" —— 错误类型：{type_desc}"
                     )
 
             if undelivered:
