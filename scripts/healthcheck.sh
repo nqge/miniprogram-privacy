@@ -214,10 +214,26 @@ fi
 # ⚠️ 缓存不能只按「天」—— 那样新加的条目当天就验不到
 #    (那是「派生数据会过期」的同款问题：缓存也会过期)。
 l1_cache=/tmp/openclaw/l1_verify_cache.json
+# ⚠️ 2026-11-21 修正（缓存失效范围不够 → 陈旧 FAIL 会被永久缓存）：
+#   原来指纹**只覆盖** memory/L1-entries/E*.md（独立文件）。
+#   但 verify_l1_retrieval.py 的第 1 层结构检查**也读主库**
+#   （memory/L1-experience-library.md，判「E{n} 不在主库里」）
+#   → 加完条目、**还没同步主库**的那一刻跑一次验证 → rc=1（FAIL）
+#   → 之后同步主库，只改主库文件、**独立文件一个字节没动** → 指纹不变
+#   → **陈旧的 FAIL 被无限期缓存**，而结果行还显示「81/81 可被检索」
+#   （因为结果行只数结构通过数，不反映 misses）→ 报告里两个事实互相矛盾。
+#
+#   修法：指纹必须覆盖**所有会改变验证结论的文件**：
+#   ① 独立文件（E*.md）② 主库（L1-experience-library.md）③ MEMORY.md 的声明
 l1_fp=$(python3 - << 'PYF' 2>/dev/null
 import glob, hashlib
 h = hashlib.md5()
-for f in sorted(glob.glob('/root/.openclaw/workspace/memory/L1-entries/E*.md')):
+files = sorted(glob.glob('/root/.openclaw/workspace/memory/L1-entries/E*.md'))
+files += [
+    '/root/.openclaw/workspace/memory/L1-experience-library.md',
+    '/root/.openclaw/workspace/MEMORY.md',
+]
+for f in files:
     try:
         with open(f, 'rb') as fh:
             h.update(fh.read())
@@ -2541,6 +2557,32 @@ if [ $? -eq 0 ]; then
 else
   bad "【W6】【V2】待落地扫描判据单测失败 -- 【V2】组的误伤过滤可能把判据改弱"
   printf '%s\n' "$w6_unit_out" | sed 's/^/    /'
+fi
+PASS=$((PASS + 1))
+
+echo "【W7】【D】陈旧快照判据单测(2026-11-21 加:E81 数据源迁移后断言读旧源)"
+
+# 2026-11-21 补:
+#   巡检报「daily-reflection 运行失败（额度耗尽）」—— 实际是 **6 天前**的
+#   cron 侧陈旧快照：2026-11-16 起该 job 改由 systemd 闸门触发，
+#   cron/jobs.json 迁移后**再没被写过**，但【D】组还在读它
+#   → 判据把旧源的最后一个快照当成了「当前故障」。
+#
+# ⚠️ 这一组的危险方向和【W6】**相反**：
+#   修「假故障」最省事的做法是「看到 error 就忽略」→ **真故障也被吞掉**，
+#   比假故障更危险（噪音 vs 真漏）。
+#   → 单测必须**双向**覆盖：
+#     ① 真阳性：陈旧快照 → **不**报当前故障
+#     ② 真阴性：闸门真的 error / cron 仍 enabled → **要**报
+#     ③ 注入自检：改判据 → 结果**必须**跟着变（防注入空转、测试全绿但什么都没测）
+# scripts/test_e81_stale_snapshot.py **import 真身**(不抄判据)
+w7_unit_out=$(python3 scripts/test_e81_stale_snapshot.py 2>&1)
+if [ $? -eq 0 ]; then
+  w7_unit_cases=$(printf '%s' "$w7_unit_out" | grep -c '✅')
+  ok "【W7】【D】陈旧快照判据单测通过（${w7_unit_cases} 个用例，含真阳性/真阴性/注入自检）"
+else
+  bad "【W7】【D】陈旧快照判据单测失败 -- 【D】组可能把旧快照当故障，或（更糟）把真故障一起吞掉"
+  printf '%s\n' "$w7_unit_out" | sed 's/^/    /'
 fi
 PASS=$((PASS + 1))
 

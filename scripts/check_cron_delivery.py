@@ -592,6 +592,121 @@ def _load_history(env, job_id, limit=20):
         return None  # 取不到不算失败，但不能当成「没问题」
 
 
+# ── E81：数据源迁移后断言还在读旧源 → 报的是假故障 ─────────────────────
+#
+# 2026-11-16 起 daily-learning / daily-reflection 改由 **systemd 闸门触发**
+# （cron 里 enabled=False，只作为被触发的目标）。
+# 而本判据读的是 /root/.openclaw/cron/jobs.json —— 这份文件**迁移后再没被写过**：
+#   daily-reflection: enabled=False | lastRunAt=None | lastRunStatus=error
+# → `lastRunStatus` 停在**迁移前最后一次 cron 运行**的结果（2026-11-15 07:03，额度耗尽）。
+#
+# 实测后果：巡检把一条 **6 天前、且属于旧执行路径**的失败，
+# 当成「当前故障」报出来（2026-11-21 08:10 抓到的）。
+#
+# 关键：新路径（systemd）的失败形态**已经被专门修过**（额度闸门把
+# 「跑 217s 空转、零产出」变成「秒级跳过」）→ 旧源的 error 不代表新路径会重演。
+#
+# 修法：**先判断这个状态是不是「陈旧快照」**：
+#   ① cron 任务已 disabled（= 不再由 cron 自己调度）；
+#   ② cron 侧没有近期运行记录（lastRunAt 为空 / 最近一次早于迁移点）；
+#   ③ 闸门历史里有该 job 的**近期**记录 → 说明活的真相源在 gate-history.jsonl。
+# → 此时**改读闸门历史**判定，并明确标注来源，不拿旧快照当故障告警。
+
+GATE_HISTORY_PATH = Path("/root/.openclaw/workspace/memory/gate-history.jsonl")
+
+# 迁移日：2026-11-16（daily-learning / daily-reflection 交给 systemd 闸门）
+# 之后的 cron 运行记录一律视为「旧执行路径的历史」。
+SYSTEMD_MIGRATION_DAY = datetime.date(2026, 11, 16)
+
+
+def _read_gate_history(path=None):
+    """读闸门历史（**活的**真相源）。取不到返回 None（= 不知道，不是没问题）。"""
+    p = Path(path) if path else GATE_HISTORY_PATH
+    if not p.exists():
+        return None
+    out = []
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("job"):
+                out.append(rec)
+    except Exception:
+        return None
+    return out
+
+
+def _gate_records_for(history, job_name):
+    """按 job 名过滤闸门历史（daily-learning / daily-reflection）。"""
+    if not history:
+        return []
+    # cron job 名与闸门 job 名一致，直接匹配；兼容带 -gate 后缀的写法
+    cands = {job_name, f"{job_name}-gate"}
+    return [r for r in history if r.get("job") in cands]
+
+
+def _gate_result_is_failure(rec):
+    """闸门记录算不算「失败」。
+
+    - error：闸门自己出错（cron job 找不到等）→ 真故障
+    - blocked/skipped：额度不足或上游过载 → **闸门正常工作**，不是故障
+    - triggered/ok：放行 → 正常
+    """
+    r = (rec.get("result") or "").lower()
+    return r == "error"
+
+
+def _stale_snapshot_info(job, history, env=None, job_id=None):
+    """判断这个 job 的 cron 状态是不是**陈旧快照**。
+
+    返回 (is_stale: bool, detail: dict)
+    detail 里带：最近一次 cron 运行时间、最近一次闸门时间、迁移日。
+    """
+    name = job.get("name", "?")
+    detail = {"name": name, "cron_last_ts": None, "gate_last_ts": None}
+
+    # ── ① cron 任务已 disabled（不再由 cron 自己调度）──
+    if job.get("enabled") is not False:
+        return False, detail
+
+    # ── ② cron 侧最后一次运行早于迁移日 → 快照是旧的 ──
+    cron_after_migration = False
+    if job_id:
+        runs = _load_history(env, job_id, limit=1)
+        if runs:
+            ts = runs[0].get("ts") or runs[0].get("runAtMs")
+            if ts:
+                try:
+                    d = datetime.datetime.fromtimestamp(ts / 1000).date()
+                    detail["cron_last_ts"] = d.isoformat()
+                    if d >= SYSTEMD_MIGRATION_DAY:
+                        cron_after_migration = True
+                except Exception:
+                    pass
+
+    # ── ③ 闸门历史里有没有该 job 的记录？（先把信息填上，两种分支都要用）──
+    grecs = _gate_records_for(history, name)
+    if grecs:
+        last = grecs[-1]
+        detail["gate_last_ts"] = last.get("ts")
+        detail["gate_result"] = last.get("result")
+
+    # 迁移后 cron 侧还在跑 → 那是**活的**（闸门通过 cron API 手动 enqueue）
+    if cron_after_migration:
+        return False, detail
+
+    # ── 判定：cron 已 disabled，且 cron 侧没有迁移后的运行 → 快照陈旧 ──
+    #    （闸门历史有没有都算陈旧 —— 因为 cron 那条路径本身已经不产生事实了）
+    if detail["cron_last_ts"] is None or detail["cron_last_ts"] < SYSTEMD_MIGRATION_DAY.isoformat():
+        return True, detail
+    return False, detail
+
+
 def main() -> int:
     # 日志降噪：每次 CLI 调用会重新注册全部插件，INFO 级打 6+ 行
     # 「feishu_xxx: Registered ...」，占当日日志 87%。
@@ -642,6 +757,10 @@ def main() -> int:
         print("__FAILED__=1")
         return 1
 
+    # E81：读**活的**闸门历史（cron → systemd 迁移后的真相源）。
+    # 取不到不算失败（= 不知道），但也不能因此放过 cron 侧的故障判断。
+    gate_history = _read_gate_history()
+
     for j in jobs:
         name = j.get("name", "?")
         dl = j.get("delivery", {}) or {}
@@ -655,6 +774,36 @@ def main() -> int:
         # 从未运行过的新任务不算失败（没有历史 ≠ 出故障）
         if run_status is None and not st.get("lastRunAtMs"):
             print(f"WARN {name} 尚未运行过（新建任务，等待首次执行）")
+            continue
+
+        # ── E81：先问「这个状态是现在发生的，还是上次写入的」──
+        # 数据源迁移过（cron → systemd 闸门）时，jobs.json 里的 state 是**陈旧快照**。
+        # 直接拿它判故障 = 把 6 天前的失败当成当前故障（2026-11-21 实测）。
+        job_id = j.get("id") or j.get("jobId")
+        stale, sdet = _stale_snapshot_info(j, gate_history, env, job_id)
+        if stale:
+            grecs = _gate_records_for(gate_history, name)
+            gfail = [r for r in grecs if _gate_result_is_failure(r)]
+            last_gate = sdet.get("gate_last_ts") or "无记录"
+            last_cron = sdet.get("cron_last_ts") or "迁移后无运行"
+            if gfail:
+                # 闸门（**活的**真相源）确实报过错 → 这是真故障
+                last = gfail[-1]
+                print(
+                    f"FAIL {name} 闸门记录失败（result={last.get('result')}, "
+                    f"ts={last.get('ts')}）"
+                    + (f"，原因：{str(last.get('reason'))[:60]}" if last.get("reason") else "")
+                )
+                failed += 1
+            else:
+                last_res = sdet.get("gate_result") or "（闸门尚无该 job 记录）"
+                print(
+                    f"PASS {name} cron 快照已陈旧（cron 最后运行 {last_cron}，"
+                    f"闸门最后记录 {last_gate} / {last_res}）→ "
+                    f"按**活的**闸门历史判定，非当前故障（E81）"
+                )
+            # 陈旧快照下，cron 侧的历史统计（连续失败、ok-but-not-delivered）
+            # 全部属于**旧执行路径** → 不再当当前故障报。
             continue
 
         if run_status != "ok":

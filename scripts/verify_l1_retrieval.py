@@ -322,8 +322,21 @@ def main():
                               if e not in searched_ids and e not in struct_bad])
     hits += struct_ok_skipped
 
-    print(f" 结果: {hits}/{len(files)} 条经验可被检索"
-          f"（结构全检 {len(all_ids)} 条 · 真实检索 {len(searched_ids)} 条）")
+    # ⚠️ 2026-11-21 修正（结果行不能与 misses 矛盾）：
+    #   原来「hits」只数**结构通过**的条目，**不扣掉 misses** →
+    #   于是出现「结果: 81/81 条经验可被检索」+「❌ FAIL E81 不在主库里」
+    #   **两个事实互相矛盾**（2026-11-21 08:10 实测）。
+    #   巡检拿这一行做报告文案 → 报告里同时出现
+    #   「有经验检索不到」和「81/81 可被检索」，看的人没法判断哪个真。
+    #   → 命中数必须**扣掉 misses**，让结果行自己就说真话。
+    total = len(files)
+    if misses:
+        print(f" 结果: {hits - len(misses)}/{total} 条经验可被检索"
+              f"（结构全检 {len(all_ids)} 条 · 真实检索 {len(searched_ids)} 条 · "
+              f"**失败 {len(misses)} 条**）")
+    else:
+        print(f" 结果: {hits}/{total} 条经验可被检索"
+              f"（结构全检 {len(all_ids)} 条 · 真实检索 {len(searched_ids)} 条）")
     if misses:
         print(" 提示：短条目夹在长文档中会被切碎稀释（见 E17）——")
         print("       确认该条在 memory/L1-entries/ 有独立文件，且首行重复了标题关键词")
