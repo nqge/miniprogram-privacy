@@ -28,3 +28,5 @@
 {"ts": "2026-11-22T00:10:18", "state": "quota_exhausted", "detail": "额度特征命中"}
 {"ts": "2026-11-23T14:22:18", "state": "quota_exhausted", "detail": "额度特征命中"}
 {"ts": "2026-11-23T07:21:34Z", "state": "ok", "detail": "有可用 provider"}
+{"ts": "2026-11-23T07:52:26Z", "state": "ok", "detail": "有可用 provider"}
+{"ts": "2026-11-23T08:23:26Z", "state": "ok", "detail": "有可用 provider"}
