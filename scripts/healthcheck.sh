@@ -562,6 +562,27 @@ while IFS= read -r line; do
   esac
 done <<< "$a2_report"
 
+# ── A2-4) 闸门跳过的日子，「当天没有当日笔记」是不是一个静默的洞（E83）────
+# 2026-11-23 新增（E83）：
+#   上面第 1 条只扫 `status != ok` 的 run 摘要 —— 闸门跳过**压根没进 cron**，
+#   没有 run 记录 → 没有摘要 → **结构上不可能被抓到**。
+#   第 3 条只遍历**已存在**的笔记文件 → 「本该有却没有」也不在它视野里。
+#   → 三层都漏了：11-22 被闸门跳过那天，巡检 PASS=91 FAIL=0，一条都没报。
+#
+# 判据真身: scripts/check_note_gaps.py(自检 --self-test)
+# 数据源换成**闸门自己的历史**（memory/gate-history.jsonl）——
+# 只有闸门明确记录了 skipped 的日子才可能被判为洞；带宽限期（1 天），
+# 避免「下一个 09:00 才会补记」造成的假阳性。
+gap_report=$(python3 "$WORKSPACE/scripts/check_note_gaps.py" 2>/dev/null)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+  esac
+done <<< "$gap_report"
+# ⚠️ bad() 已经把 FAIL 计数加过了 —— 这里**不能**再动 a2_fail（会双计，
+#    且 a2_fail 本身没人读 → 典型的「改不动也不报错」的死代码，E81 漂移的温床）
+
 # ── E. 凭证暴露面 ─────────────────────────────────
 echo ""
 echo "【E】凭证暴露面"
@@ -2583,6 +2604,32 @@ if [ $? -eq 0 ]; then
 else
   bad "【W7】【D】陈旧快照判据单测失败 -- 【D】组可能把旧快照当故障，或（更糟）把真故障一起吞掉"
   printf '%s\n' "$w7_unit_out" | sed 's/^/    /'
+fi
+PASS=$((PASS + 1))
+
+echo "【W8】【A2-4】当日笔记缺口判据单测(2026-11-23 加:E83 洞检测的自检)"
+
+# 2026-11-23 补（E83 落地）：
+#   新增的【A2-4】判据（scripts/check_note_gaps.py）要抓「闸门跳过的日子，
+#   当天没有当日笔记」这个静默的洞。
+#
+# ⚠️ 这一组的危险方向是**假阳性**：
+#   「没记录」≠「被跳过」。闸门 2026-11-16 才上线，更早的日子压根不受它管；
+#   若把「闸门历史里没有这一天的记录」也判成洞 → 天天误报 → 训练出划走的习惯
+#   （E66 的假警报驯化）。**更糟的是**：一被判据天天误报，真洞出现时就会被无视。
+#
+#   → 单测必须覆盖：
+#     ① 真阳性：skipped + 无笔记 + 宽限期过 → **要**报
+#     ② 真阴性：skipped + 有补记笔记 → **不**报
+#     ③ 真阴性：闸门历史里根本没这天 → **不**报（防假阳性）
+#     ④ 真阴性：宽限期内 → **不**报（下一个 09:00 还能补）
+w8_unit_out=$(python3 scripts/check_note_gaps.py --self-test 2>&1)
+if [ $? -eq 0 ]; then
+  w8_unit_cases=$(printf '%s' "$w8_unit_out" | grep -oP '__SELF_TEST_PASSED__=\K[0-9]+')
+  ok "【W8】【A2-4】当日笔记缺口判据单测通过（${w8_unit_cases} 个用例，含真阳性/假阳性防护）"
+else
+  bad "【W8】【A2-4】当日笔记缺口判据单测失败 -- 可能把「没记录」当成「被跳过」而天天误报，或漏掉真洞"
+  printf '%s\n' "$w8_unit_out" | sed 's/^/    /'
 fi
 PASS=$((PASS + 1))
 
