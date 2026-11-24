@@ -142,8 +142,19 @@ def to_local_date(ts: str, naive_is_local: bool = True):
     return dt.astimezone(LOCAL_TZ).date()
 
 
-def basis_mismatch(path):
+def basis_mismatch(path, ts_fields=("ts",)):
     """扫描一个 JSONL 文件，统计「带 Z」与「不带 Z」的行数。
+
+    参数
+    ----
+    path:
+        要扫的 JSONL 文件。
+    ts_fields:
+        要检查的时间戳字段名（默认只查 `ts`）。
+        ⚠️ **可以传多个**（如 `("ts", "ts_end")`）——
+        实测 2026-11-24：`gate-history.jsonl` 的 `ts` 已修好，
+        但 `ts_end` 还留着裸本地时间（虽然当前**没人读**它，
+        但「没人读」不是「写对了」的理由）→ 一起扫，避免留下同样的坑。
 
     返回 dict：
         total    总行数（有效 JSON 行）
@@ -156,10 +167,14 @@ def basis_mismatch(path):
     """
     total = with_z = no_z = 0
     samples = []
+    inconsistent = 0   # **行内**基准不一致的行数（同一行的字段互相矛盾）
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
-        return {"total": 0, "with_z": 0, "no_z": 0, "mixed": False, "samples": []}
+        return {
+            "total": 0, "with_z": 0, "no_z": 0, "mixed": False,
+            "inconsistent": 0, "samples": [],
+        }
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -168,21 +183,38 @@ def basis_mismatch(path):
             d = json.loads(line)
         except Exception:
             continue
-        ts = str(d.get("ts") or "")
-        if len(ts) < 10:
+        # 该行**任一**被检查字段有合法时间戳 → 这行参与统计
+        vals = [str(d.get(f) or "") for f in ts_fields]
+        vals = [v for v in vals if len(v) >= 10]
+        if not vals:
             continue
         total += 1
-        if ts.endswith("Z"):
+        has_z = any(v.endswith("Z") for v in vals)
+        all_z = all(v.endswith("Z") for v in vals)
+        if has_z and not all_z:
+            # ⚠️ **行内**不一致：同一行里有的字段带 Z、有的不带
+            #   → 这一行本身就混了两套基准 → 必须报 FAIL
+            inconsistent += 1
+            no_z += 1
+            for v in vals:
+                if not v.endswith("Z") and len(samples) < 5:
+                    samples.append(v)
+        elif all_z:
             with_z += 1
         else:
+            # 整行都不带 Z（自洽但有歧义）
             no_z += 1
-            if len(samples) < 5:
-                samples.append(ts)
+            for v in vals:
+                if len(samples) < 5:
+                    samples.append(v)
     return {
         "total": total,
         "with_z": with_z,
         "no_z": no_z,
+        # mixed：文件级 —— 有带 Z 的行也有不带 Z 的行
         "mixed": bool(with_z and no_z),
+        # inconsistent：行级 —— 同一行内部字段互相矛盾
+        "inconsistent": inconsistent,
         "samples": samples,
     }
 

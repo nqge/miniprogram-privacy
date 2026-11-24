@@ -52,22 +52,40 @@ from quota_ts import basis_mismatch  # noqa: E402
 
 WS = Path("/root/.openclaw/workspace")
 TARGETS = [
-    ("额度探测历史", WS / "memory" / "quota-history.jsonl"),
-    ("闸门历史", WS / "memory" / "gate-history.jsonl"),
+    # 每个目标：**要检查哪些时间戳字段**
+    ("额度探测历史", WS / "memory" / "quota-history.jsonl", ("ts",)),
+    # ⚠️ `ts_end` 也一起查（2026-11-24 加）：
+    #   它当前**没人读**，但「没人读」不是「写对了」的理由 ——
+    #   留着裸本地时间，就是留着**同一个坑**，
+    #   等哪天有人开始读它，就会踩 E85 那个坑。
+    ("闸门历史", WS / "memory" / "gate-history.jsonl", ("ts", "ts_end")),
 ]
 
 
-def check_target(name: str, path: Path):
+def check_target(name: str, path: Path, ts_fields=("ts",)):
     """单个文件的基准一致性 → (level, msg)
 
     level: "PASS" | "WARN" | "FAIL" | "SKIP"
     """
     if not path.exists():
         return "SKIP", f"{name}: 文件不存在（跳过）"
-    info = basis_mismatch(path)
+    info = basis_mismatch(path, ts_fields=ts_fields)
     total = info["total"]
     if total == 0:
         return "SKIP", f"{name}: 无有效记录（跳过）"
+    fields = "/".join(ts_fields)
+    # ⚠️ **行内不一致**（同一行的字段互相矛盾）→ FAIL
+    #   实测 2026-11-24：`gate-history.jsonl` 的 `ts` 已带 Z，
+    #   但 `ts_end` 还是裸本地时间 → **同一行**里两套基准
+    #   → 这种比「文件级混用」更明确：它连自洽都做不到。
+    if info.get("inconsistent"):
+        return "FAIL", (
+            f"{name}: {info['inconsistent']} 行**行内基准不一致**"
+            f"（同一行的字段里，有的带 UTC `Z`、有的不带）"
+            f"；连「整行同基准」都做不到 → 归日统计必然算错（E85）"
+            f"；样例 no-Z: {', '.join(info['samples'][:3])}"
+            f" → 修法: python3 scripts/quota_ts.py {path.name}"
+        )
     if info["mixed"]:
         return "FAIL", (
             f"{name}: 时间戳基准不统一 —— {info['with_z']} 行带 UTC `Z`、"
@@ -82,7 +100,7 @@ def check_target(name: str, path: Path):
             f"（E85：格式的歧义比格式的缺失更危险）；"
             f"修法: python3 scripts/quota_ts.py {path.name}"
         )
-    return "PASS", f"{name}: {total} 行基准统一（全部 UTC `Z`）"
+    return "PASS", f"{name}: {total} 行基准统一（全部 UTC `Z`，字段 {fields}）"
 
 
 def _self_test():
@@ -170,6 +188,25 @@ def _self_test():
     check("用例7 故障注入(FAIL→PASS)", lvl_before == "FAIL" and lvl_after == "PASS",
           f"before={lvl_before} after={lvl_after}")
 
+    # 用例 8：**多字段扫描**（2026-11-24 加）
+    #   `ts` 干净但 `ts_end` 是裸串 → **必须**报 FAIL
+    #   （当前没人读 ts_end，但留着就是留着同一个坑）
+    p = tmpdir / "h.jsonl"
+    p.write_text(
+        '{"ts": "2026-11-24T01:00:00Z", "ts_end": "2026-11-24T09:00:00", "state": "ok"}\n',
+        encoding="utf-8",
+    )
+    lvl, _ = check_target("t", p, ("ts", "ts_end"))
+    check("用例8 ts干净但ts_end裸串=FAIL", lvl == "FAIL", f"level={lvl}")
+    lvl2, _ = check_target("t", p, ("ts",))
+    check("用例8b 只查ts时=PASS", lvl2 == "PASS", f"level={lvl2}")
+    p.write_text(
+        '{"ts": "2026-11-24T01:00:00Z", "ts_end": "2026-11-24T01:00:01Z", "state": "ok"}\n',
+        encoding="utf-8",
+    )
+    lvl3, _ = check_target("t", p, ("ts", "ts_end"))
+    check("用例8c 两个字段都Z=PASS", lvl3 == "PASS", f"level={lvl3}")
+
     print(f"__SELF_TEST_PASSED__={passed}")
     print(f"__SELF_TEST_FAILED__={len(fails)}")
     for f in fails:
@@ -181,8 +218,8 @@ def main():
     if "--self-test" in sys.argv:
         sys.exit(_self_test())
 
-    for name, path in TARGETS:
-        lvl, msg = check_target(name, path)
+    for name, path, ts_fields in TARGETS:
+        lvl, msg = check_target(name, path, ts_fields)
         print(f"{lvl} {msg}")
     return 0
 

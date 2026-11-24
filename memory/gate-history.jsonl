@@ -6,12 +6,12 @@
 {"ts": "2026-11-17T01:28:23Z", "job": "daily-learning", "result": "blocked", "reason": "结论：**上游瞬时过载**（不是额度问题）—— 重试后仍不通"}
 {"ts": "2026-11-17T01:28:23Z", "job": "daily-learning", "result": "skipped", "reason": "upstream_busy"}
 {"ts": "2026-11-17T01:38:31Z", "job": "daily-learning", "result": "triggered", "rc": 0}
-{"ts": "2026-11-17T08:35:44Z", "ts_end": "2026-11-17T16:35:44", "job": "daily-learning", "result": "ok", "reason": "gate_passed", "check_only": true}
-{"ts": "2026-11-18T01:00:49Z", "ts_end": "2026-11-18T09:00:49", "job": "daily-learning", "result": "triggered", "rc": 0}
-{"ts": "2026-11-19T01:00:46Z", "ts_end": "2026-11-19T09:00:46", "job": "daily-learning", "result": "triggered", "rc": 0}
-{"ts": "2026-11-20T01:00:43Z", "ts_end": "2026-11-20T09:00:43", "job": "daily-learning", "result": "triggered", "rc": 0}
-{"ts": "2026-11-21T01:00:47Z", "ts_end": "2026-11-21T09:00:47", "job": "daily-learning", "result": "triggered", "rc": 0}
-{"ts": "2026-11-21T23:00:39Z", "ts_end": "2026-11-22T07:00:39", "job": "daily-reflection", "result": "skipped", "reason": "quota"}
-{"ts": "2026-11-22T01:00:37Z", "ts_end": "2026-11-22T09:00:37", "job": "daily-learning", "result": "skipped", "reason": "quota"}
-{"ts": "2026-11-23T01:00:42Z", "ts_end": "2026-11-23T09:00:42", "job": "daily-learning", "result": "triggered", "rc": 0}
-{"ts": "2026-11-24T01:00:45Z", "ts_end": "2026-11-24T09:00:45", "job": "daily-learning", "result": "triggered", "rc": 0}
+{"ts": "2026-11-17T08:35:44Z", "ts_end": "2026-11-17T08:35:44Z", "job": "daily-learning", "result": "ok", "reason": "gate_passed", "check_only": true}
+{"ts": "2026-11-18T01:00:49Z", "ts_end": "2026-11-18T01:00:49Z", "job": "daily-learning", "result": "triggered", "rc": 0}
+{"ts": "2026-11-19T01:00:46Z", "ts_end": "2026-11-19T01:00:46Z", "job": "daily-learning", "result": "triggered", "rc": 0}
+{"ts": "2026-11-20T01:00:43Z", "ts_end": "2026-11-20T01:00:43Z", "job": "daily-learning", "result": "triggered", "rc": 0}
+{"ts": "2026-11-21T01:00:47Z", "ts_end": "2026-11-21T01:00:47Z", "job": "daily-learning", "result": "triggered", "rc": 0}
+{"ts": "2026-11-21T23:00:39Z", "ts_end": "2026-11-21T23:00:39Z", "job": "daily-reflection", "result": "skipped", "reason": "quota"}
+{"ts": "2026-11-22T01:00:37Z", "ts_end": "2026-11-22T01:00:37Z", "job": "daily-learning", "result": "skipped", "reason": "quota"}
+{"ts": "2026-11-23T01:00:42Z", "ts_end": "2026-11-23T01:00:42Z", "job": "daily-learning", "result": "triggered", "rc": 0}
+{"ts": "2026-11-24T01:00:45Z", "ts_end": "2026-11-24T01:00:45Z", "job": "daily-learning", "result": "triggered", "rc": 0}
