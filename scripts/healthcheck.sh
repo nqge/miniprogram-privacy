@@ -637,6 +637,33 @@ while IFS= read -r line; do
   esac
 done <<< "$tsb_report"
 
+# ── R. 落地回执（E87）────────────────────────────────
+#
+#   E87 教的三锚点：**意图 → 回执 → 可回放**。
+#   其中「回执」最容易变成**嘴上说说** ——
+#   条目写「✅ 落地状态：已加 scripts/xxx.py」，
+#   但那个脚本**根本没建**，或者建了却没被任何地方调用。
+#   这就是 E68「声称已写入但文件从未存在」的同族坑。
+#
+#   本组做一件很朴素的事：
+#   **凡是声称「已落地」的 L1 条目，它提到的 scripts/ 文件必须真实存在。**
+#
+#   ⚠️ 只查「文件存在」是**下限**，不是上限 ——
+#     存在 ≠ 被调用。所以还要查：**有没有被 healthcheck/cron 引用**。
+#
+# 判据真身: scripts/check_landing_receipt.py(自检 --self-test)
+echo ""
+echo "【R2】落地回执(E87：声称已落地的引用必须真实存在)"
+rcpt_report=$(python3 "$WORKSPACE/scripts/check_landing_receipt.py" 2>/dev/null)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) printf "  \033[33m⚠️  WARN\033[0m  %s\n" "${line#WARN }" ;;
+    SKIP*) printf "  \033[36m⏭️  SKIP\033[0m  %s\n" "${line#SKIP }" ;;
+  esac
+done <<< "$rcpt_report"
+
 # ── E. 凭证暴露面 ─────────────────────────────────
 echo ""
 echo "【E】凭证暴露面"
@@ -2768,6 +2795,23 @@ if [ $? -eq 0 ]; then
 else
   bad "【W11】「待落地」超期阈值判据单测失败 -- 阈值可能是恒假的（待办永远沉在底下没人管）"
   printf '%s\n' "$w11_unit_out" | sed 's/^/    /'
+fi
+PASS=$((PASS + 1))
+
+# 【W12】【R】落地回执判据单测（2026-11-24 加：E87 的自检）
+#   这一组抓的是**吹牛**：条目声称「✅ 落地状态」，但引用的脚本不存在，
+#   或者存在却**没被任何地方调用**（造了没接上 = E86 的老坑）。
+#   → 单测必须包含**故障注入**：
+#     ① 把「文件存在」判据改成恒真 → missing 必须变空
+#     ② 改成恒假 → missing 必须非空
+#     （否则判据可能是恒假的，收不到任何吹牛）
+w12_unit_out=$(python3 scripts/check_landing_receipt.py --self-test 2>&1)
+if [ $? -eq 0 ]; then
+  w12_unit_cases=$(printf '%s' "$w12_unit_out" | grep -oP '__SELF_TEST_PASSED__=\K[0-9]+')
+  ok "【W12】【R】落地回执判据单测通过（${w12_unit_cases} 个用例，含存在性故障注入）"
+else
+  bad "【W12】【R】落地回执判据单测失败 -- 判据可能抓不到「声称落地但没落地」的吹牛"
+  printf '%s\n' "$w12_unit_out" | sed 's/^/    /'
 fi
 PASS=$((PASS + 1))
 
