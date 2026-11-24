@@ -55,13 +55,6 @@
       "title": "🥜 测试发帖 - 花生来了",
       "url": "https://github.com/ythx-101/openclaw-qa/discussions/72",
       "comments": 2
-    },
-    {
-      "number": "d-36",
-      "kind": "discussion",
-      "title": "AI Agent 如何优雅地处理人机验证？",
-      "url": "https://github.com/ythx-101/openclaw-qa/discussions/36",
-      "comments": 2
     }
   ],
   "distilled": [
@@ -233,6 +226,13 @@
       "comments": 198,
       "distilled_at": "2026-11-24T07:45:00Z",
       "healed_by": "noise-filter"
+    },
+    {
+      "number": "d-36",
+      "kind": "discussion",
+      "title": "AI Agent 如何优雅地处理人机验证？",
+      "comments": 2,
+      "distilled_at": "2026-11-24T15:43:14"
     }
   ]
 }
