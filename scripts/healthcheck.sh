@@ -614,6 +614,29 @@ while IFS= read -r line; do
   esac
 done <<< "$quota_report"
 
+# ── P3. 时间戳基准一致性（E85）────────────────────────────
+#
+#   E85 诊断出：`memory/quota-history.jsonl` 里混着两种时间戳
+#   （实时写 UTC 带 `Z`，回填写本地时间不带 `Z`），
+#   而消费方按 `ts[:10]` 归日 → 把两套日历基准当同一套用。
+#   **它不报错**，只有「按天聚合」这层悄悄算错（统计虚高 → 阈值形同虚设）。
+#
+#   这一组扫的是**数据的元信息**（E82 同类）：
+#   **别只检查数据本身，要检查数据的元信息。**
+#
+# 判据真身: scripts/check_ts_basis.py(自检 --self-test)
+echo ""
+echo "【P3】时间戳基准一致性(E85)"
+tsb_report=$(python3 "$WORKSPACE/scripts/check_ts_basis.py" 2>/dev/null)
+while IFS= read -r line; do
+  case "$line" in
+    PASS*) ok "${line#PASS }" ;;
+    FAIL*) bad "${line#FAIL }" ;;
+    WARN*) printf "  \033[33m⚠️  WARN\033[0m  %s\n" "${line#WARN }" ;;
+    SKIP*) printf "  \033[36m⏭️  SKIP\033[0m  %s\n" "${line#SKIP }" ;;
+  esac
+done <<< "$tsb_report"
+
 # ── E. 凭证暴露面 ─────────────────────────────────
 echo ""
 echo "【E】凭证暴露面"
@@ -2692,6 +2715,43 @@ else
 fi
 PASS=$((PASS + 1))
 
+# 【W10】【P3】时间戳基准一致性判据单测（2026-11-24 加：E85 的落地侧）
+#   这一组的危险方向**是「永远 PASS」** —— 判据若只看「文件能不能解析」，
+#   那两种基准混在一起也照样通过（E85 最大的特征就是**不报错**）。
+#   → 单测必须覆盖：
+#     ① 全带 Z → PASS
+#     ② 混合（带 Z + 裸串）→ **要**报 FAIL
+#     ③ 全裸串 → WARN（自洽但有歧义）
+#     ④ 文件不存在 / 空文件 → SKIP，不误报
+#     ⑤ 坏 JSON 行被跳过，不影响判定
+#     ⑥ **故障注入自检**：把混合文件改成全 Z → 必须 FAIL→PASS
+#        （证明判据真的在看内容，而不是恒真）
+w10_unit_out=$(python3 scripts/check_ts_basis.py --self-test 2>&1)
+if [ $? -eq 0 ]; then
+  w10_unit_cases=$(printf '%s' "$w10_unit_out" | grep -oP '__SELF_TEST_PASSED__=\K[0-9]+')
+  ok "【W10】【P3】时间戳基准判据单测通过（${w10_unit_cases} 个用例，含故障注入自检）"
+else
+  bad "【W10】【P3】时间戳基准判据单测失败 -- 判据可能是恒真的（两种基准混在一起也不报），或误报正常文件"
+  printf '%s\n' "$w10_unit_out" | sed 's/^/    /'
+fi
+PASS=$((PASS + 1))
+
+# 【W11】「待落地」超期阈值判据单测（2026-11-24 加：E85 的教训）
+#   【V2】组的阈值原本是「跨天」→ **当天写的待办当天抓不到**，
+#   而 daily-learning 09:00 写待办、巡检 07:00 跑 → 待办**整整悬空一天**。
+#   → 新阈值 = 「熬过了一次完整巡检周期」。
+#   这一组的危险方向是**「永远不报」**（阈值太严，待办永远沉在底下）
+#   → 单测必须包含**故障注入**：换成恒假 / 恒真，用例都必须红。
+w11_unit_out=$(python3 scripts/test_pending_aging.py 2>&1)
+if [ $? -eq 0 ]; then
+  w11_unit_cases=$(printf '%s' "$w11_unit_out" | grep -oP '结果: PASS=\K[0-9]+')
+  ok "【W11】「待落地」超期阈值判据单测通过（${w11_unit_cases} 个用例，含恒假/恒真故障注入）"
+else
+  bad "【W11】「待落地」超期阈值判据单测失败 -- 阈值可能是恒假的（待办永远沉在底下没人管）"
+  printf '%s\n' "$w11_unit_out" | sed 's/^/    /'
+fi
+PASS=$((PASS + 1))
+
 echo "【U】cron 实测耗时 vs 超时余量(防明天早上撞超时)"
 
 # 2026-10-27 07:10 补:
@@ -3161,9 +3221,17 @@ echo ""
 echo "【V2】「待落地」标记扫描（E78/E79/P13 的落地保障）"
 
 pending_report=$(python3 - << 'PY' 2>/dev/null
-import os, re, datetime
+import os, re, datetime, sys
 WS = '/root/.openclaw/workspace'
 TODAY = datetime.date.today()
+
+# ⚠️ 超期判据（2026-11-24 加，E85 的教训）：
+#   「待落地」的提醒阈值不再是「跨天」，而是「**熬过了一次完整巡检**」。
+#   → 判据真身在 scripts/check_pending_aging.py（单测直接调它，不抄一份；
+#     E61/E62 的教训：抄一份判据会和真身悄悄漂移）
+sys.path.insert(0, os.path.join(WS, 'scripts'))
+from check_pending_aging import is_overdue as _is_overdue, last_healthcheck_date as _last_hc_date
+LAST_HC_DATE = _last_hc_date(today=TODAY)
 
 # 未完成声明的特征词 —— 都是**明确语义**，不会误伤普通叙述
 #
@@ -3236,6 +3304,35 @@ def _is_meta_reference(s, start, end):
             # 右引号紧邻（允许 `**` 在中间）
             if after.lstrip('*').startswith(hi):
                 return True
+
+    # ②-b 短语**嵌套在引号内**（2026-11-24 加，E85 那轮的实测坑）
+    #
+    #   现象：正则匹配到的是**引号内部的子串**，于是「紧邻引号」检查失效。
+    #     原文：「修法（待落地，尚未实现）」
+    #       → PENDING_PAT 匹配到的是 `待落地`（**不是**整个 `修法（待落地，尚未实现）`）
+    #       → before = `「修法（` → 不以 `「` 结尾 ❌
+    #       → after  = `，尚未实现）` → 不以 `」` 开头 ❌
+    #       → **引号检查两边都不成立** → 真·元引用被当成真待办 → 假警报
+    #
+    #   修法：**从匹配点往两边找**，看它是否落在**一对引号之间**
+    #   （允许中间有其他字符，如 `（`、`，尚未实现）`）。
+    #   ⚠️ 只能往**同一行内**找（引号不跨行配对）。
+    for lo, hi in META_QUOTE_PAIRS:
+        # 左引号在匹配点**之前**、且中间**没有别的同类引号**
+        lo_i = s.rfind(lo, max(0, start - 80), start)
+        if lo_i < 0:
+            continue
+        # 同一行内不能有配对的右引号在 lo_i..start 之间（否则那是别的引用）
+        seg = s[lo_i:start]
+        if hi in seg and hi != lo:
+            continue
+        hi_i = s.find(hi, end, min(len(s), end + 80))
+        if hi_i < 0:
+            continue
+        # 同一行内
+        if "\n" in s[lo_i:hi_i]:
+            continue
+        return True
 
     # ③ 后面跟着「这类/标记/声明/模式/机制」→ 短语正在被列举/定义
     tail = s[end:end + 30]
@@ -3365,7 +3462,18 @@ for fp in targets:
     else:
         d = datetime.date.fromtimestamp(os.path.getmtime(fp))
     age = (TODAY - d).days
-    if age >= 1:      # 跨天仍未落地 → 提醒
+    # ⚠️ 阈值不是「跨天」，而是「**熬过了一次完整巡检**」（2026-11-24 改，E85 的教训）
+    #
+    #   原判据：`age >= 1` → 只抓**跨天**的未完成声明。
+    #   → 缺口：**当天写的待办，当天巡检抓不到**（巡检在它之前跑），
+    #     而当天**没有第二次巡检** → 这条待办**整整一天没人管**。
+    #   → 实测 2026-11-24：E85 在 09:00 写下「修法（待落地，尚未实现）」，
+    #     巡检 07:00 跑（早于它）→ 抓不到；它的三条修法当天就能做掉。
+    #
+    #   正确语义：**「上一次巡检时它还不存在」** → 本次巡检该管它。
+    #   → 判据真身：`scripts/check_pending_aging.py`（单测直接调它，不抄一份，
+    #     E61/E62 的教训：抄一份判据会和真身悄悄漂移）
+    if _is_overdue(d, TODAY, LAST_HC_DATE):
         pending.append((rel, age))
 
 if pending:

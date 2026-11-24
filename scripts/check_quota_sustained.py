@@ -65,6 +65,9 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from quota_ts import to_local_date  # noqa: E402  (E85：显式解析，不做 ts[:10] 字面切片)
+
 WS = Path("/root/.openclaw/workspace")
 HIST = WS / "memory" / "quota-history.jsonl"
 GATE_LOG = WS / "memory" / "gate-history.jsonl"
@@ -76,7 +79,14 @@ QUOTA_MARKERS = ("Token Plan", "用量上限", "insufficient balance", "余额",
 
 
 def read_history(path: Path):
-    """读探测历史 → [(date_str, state, detail)]"""
+    """读探测历史 → [(date_str, state, detail)]
+
+    ⚠️ **归日必须显式解析**（E85）：不能用 `ts[:10]` 字面切片。
+    历史文件里混着两种基准（实时写 UTC 带 `Z`，回填写本地时间不带 `Z`），
+    字面切片等于把两套日历基准当同一套用
+    （实测：7 天窗口字面 6 天耗尽 vs 正确 UTC 5 天）。
+    → 统一走 `to_local_date()`：解析出带时区的 datetime，再转本地日历日。
+    """
     out = []
     if not path.exists():
         return out
@@ -92,7 +102,10 @@ def read_history(path: Path):
             ts = d.get("ts") or ""
             if len(ts) < 10:
                 continue
-            out.append((ts[:10], str(d.get("state") or "other_fail"), str(d.get("detail") or "")))
+            day = to_local_date(str(ts))
+            if day is None:
+                continue
+            out.append((day.isoformat(), str(d.get("state") or "other_fail"), str(d.get("detail") or "")))
     except Exception:
         pass
     return out
@@ -136,16 +149,15 @@ def count_quota_gate_skips(today=None, window_days=WINDOW_DAYS):
             ts = d.get("ts") or ""
             if len(ts) < 10:
                 continue
-            day = ts[:10]
-            try:
-                dd = datetime.date.fromisoformat(day)
-            except Exception:
+            # ⚠️ 显式解析归日（E85），不要 `ts[:10]`
+            dd = to_local_date(str(ts))
+            if dd is None:
                 continue
             if dd < start or dd > today:
                 continue
             if d.get("result") == "skipped" and str(d.get("reason") or "") == "quota":
                 n += 1
-                days.add(day)
+                days.add(dd.isoformat())
     except Exception:
         pass
     return n, sorted(days)

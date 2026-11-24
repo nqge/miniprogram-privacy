@@ -65,6 +65,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from quota_ts import to_utc_iso  # noqa: E402  (E85：时间戳基准统一为 UTC+Z)
+
 WS = Path("/root/.openclaw/workspace")
 DEFAULT_JOB = "daily-learning"
 
@@ -136,8 +139,13 @@ def record(result: str, reason: str = "", extra: dict | None = None):
         st = _start_ts()
         rec = {
             # 用**启动时刻**（与日志文件名同基准），不是写入时刻
-            "ts": st.isoformat(timespec="seconds"),
-            "ts_end": datetime.datetime.now().isoformat(timespec="seconds"),
+            # ⚠️ **必须写 UTC + `Z`**（E85）：
+            #   裸的 `isoformat()` 是**本地时间且不带时区标记**，
+            #   而 `quota-history.jsonl` 里实时记录写的是 UTC + `Z`
+            #   → 同一个文件混两套基准，归日统计会算错（E85）。
+            #   → 时间戳基准属于**数据契约**，在**第一个写入方**这里定死。
+            "ts": to_utc_iso(st),
+            "ts_end": to_utc_iso(datetime.datetime.now()),
             "job": JOB_NAME,
             "result": result,
         }

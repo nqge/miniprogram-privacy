@@ -51,6 +51,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from quota_ts import parse_ts, to_local_date, to_utc_iso  # noqa: E402  (E85：时间戳基准统一)
+
 WS = Path("/root/.openclaw/workspace")
 HIST = WS / "memory" / "quota-history.jsonl"
 
@@ -161,7 +164,10 @@ def main():
                 continue
             try:
                 d = json.loads(ln)
-                existing.add((d.get("ts", "")[:10], d.get("state")))
+                # ⚠️ 归日基准必须与写入侧一致（E85）：统一走 `to_local_date`
+                ts = str(d.get("ts") or "")
+                day = to_local_date(ts)
+                existing.add((day.isoformat() if day else ts[:10], d.get("state")))
             except Exception:
                 continue
 
@@ -171,12 +177,20 @@ def main():
     for ts, body in runs:
         state, detail = classify_run(body)
         states[state] = states.get(state, 0) + 1
+        # ⚠️ **写入前必须统一时区基准**（E85）
+        #   journald `-o short-iso` 给的是**本地时间**（无时区标记），
+        #   而实时记录写的是 UTC + `Z` —— 两者混在同一文件里，
+        #   消费方按 `ts[:10]` 归日就会把两套日历基准当同一套用
+        #   （实测：7 天窗口字面 6 天耗尽 vs 正确 UTC 5 天）。
+        #   → 这里把 journald 的本地时间串转成 UTC + `Z` 再入库。
+        dt = parse_ts(ts, naive_is_local=True)
+        ts_utc = to_utc_iso(dt) if dt is not None else ts
         # 每天只保留**一条**代表记录（取当天最后一次探测）
-        day = ts[:10]
+        day = ts_utc[:10]
         if (day, state) in existing:
             continue
         out.append({
-            "ts": ts,
+            "ts": ts_utc,
             "state": state,
             "detail": detail,
         })
@@ -189,7 +203,7 @@ def main():
     #   → 判据问的是「这天系统有没有过不能工作的时候」，不是「这天结束时是什么状态」
     by_day = {}
     for rec in out:
-        day = rec["ts"][:10]
+        day = rec["ts"][:10]   # ⚠️ 已是 UTC+Z，切片与写入基准一致（E85）
         prev = by_day.get(day)
         # 优先级：quota_exhausted > other_fail > ok
         rank = {"quota_exhausted": 3, "other_fail": 2, "ok": 1}
@@ -213,14 +227,16 @@ def main():
                 rec = json.loads(l)
             except Exception:
                 continue
-            day = rec.get("ts", "")[:10]
+            # ⚠️ 归日基准统一（E85）：显式解析后转本地日历日，不做字面切片
+            _d = to_local_date(str(rec.get("ts") or ""))
+            day = _d.isoformat() if _d else str(rec.get("ts", ""))[:10]
             if not day:
                 continue
             prev = merged.get(day)
             if prev is None or rank.get(rec.get("state"), 0) > rank.get(prev.get("state"), 0):
                 merged[day] = rec
     for rec in final:
-        day = rec["ts"][:10]
+        day = rec["ts"][:10]   # ⚠️ 已是 UTC+Z（E85）
         prev = merged.get(day)
         if prev is None or rank.get(rec.get("state"), 0) > rank.get(prev.get("state"), 0):
             merged[day] = rec
