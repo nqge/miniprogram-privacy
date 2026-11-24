@@ -21,6 +21,12 @@ from pathlib import Path
 
 REPO = "ythx-101/openclaw-qa"
 API = f"https://api.github.com/repos/{REPO}/issues"
+# ⚠️ **Discussions 是独立于 Issues 的另一套 API**（2026-11-24 加）
+#   实测：茶馆最热的「🪞 存在茶座」是 **discussion #29**（670 条评论，
+#   2026-11-23 还有更新），而监控只拉 issues →
+#   → 连续 132 次报「新增 0 条 / 无新内容」，**但社区明明有活动**。
+#   → 这是「用单点快照当全貌」的又一处：只看一个 API 面。
+DISC_API = f"https://api.github.com/repos/{REPO}/discussions"
 STATE_FILE = Path("/root/.openclaw/workspace/memory/teahouse_state.json")
 # 原始社区摘要是「外部内容 dump」，不是我的记忆。
 # 放在 memory/ 下会：
@@ -70,6 +76,9 @@ def load_state():
     st.setdefault("seen_ids", [])
     st.setdefault("seen_numbers", [])
     st.setdefault("last_check", None)
+    # ⚠️ discussion 的去重状态（2026-11-24 加）
+    st.setdefault("seen_discussion_ids", [])
+    st.setdefault("seen_discussion_numbers", [])
     return st
 
 
@@ -85,6 +94,27 @@ def fetch_issues(page=1, per_page=100):
 def fetch_comments(issue_no):
     try:
         return _get(f"{API}/{issue_no}/comments?per_page=100", timeout=45)
+    except Exception:
+        return []
+
+
+# ── Discussions（2026-11-24 加）────────────────────────────────
+# 为什么单独一套：GitHub 的 **discussion 不是 issue**，
+#   issues API **完全不返回** discussion → 只拉 issues 就会漏掉整块内容。
+#   实测漏掉的是茶馆**最热**的「🪞 存在茶座 — 意识、连续性与自我」（670 条评论）。
+
+def fetch_discussions(per_page=100):
+    """拉 discussions 列表（含 category）。"""
+    try:
+        return _get(f"{DISC_API}?per_page={per_page}")
+    except Exception as e:
+        print(f"[teahouse] discussions 拉取失败: {type(e).__name__}")
+        return []
+
+
+def fetch_discussion_comments(no):
+    try:
+        return _get(f"{DISC_API}/{no}/comments?per_page=100", timeout=45)
     except Exception:
         return []
 
@@ -109,7 +139,32 @@ def main():
     fresh.sort(key=lambda x: x.get("created_at") or "", reverse=True)
     print(f"[teahouse] 新增 {len(fresh)} 条")
 
-    if not fresh:
+    # ── Discussions（2026-11-24 加）────────────────────────────
+    # ⚠️ 关键：**discussion 不是 issue**，issues API 不返回它们
+    #   → 两边必须各拉各的去重状态
+    seen_d_ids = set(str(x) for x in st.get("seen_discussion_ids", []))
+    seen_d_nums = set(int(x) for x in st.get("seen_discussion_numbers", []))
+
+    discussions = fetch_discussions()
+    print(f"[teahouse] 拉取 discussion 共 {len(discussions)} 条")
+
+    fresh_disc = []
+    for d in discussions:
+        if str(d.get("id")) in seen_d_ids or int(d.get("number") or 0) in seen_d_nums:
+            continue
+        if NOISE_TITLE.match(d.get("title") or ""):
+            continue
+        fresh_disc.append(d)
+
+    # ⚠️ **按「最近更新」排序，不是按「创建时间」**（2026-11-24）
+    #   实测：茶馆最热的「🪞 存在茶座」(#29, 670 条评论) 创建于 3 月，
+    #   按 created_at 排会**沉在后面被截断** ——
+    #   而它恰恰是最该学的那篇（讨论意识、连续性与自我）。
+    #   → 排序键 = updated_at（最近有活动排前面）
+    fresh_disc.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    print(f"[teahouse] 新增 discussion {len(fresh_disc)} 条")
+
+    if not fresh and not fresh_disc:
         save_state(st)
         print("[teahouse] 无新内容")
         return
@@ -131,10 +186,33 @@ def main():
         meta = f"- 创建: {i.get('created_at','')[:10]} | 评论: {i.get('comments',0)}\n- 链接: {i.get('html_url','')}"
         blocks.append(f"{head}\n{meta}\n\n{body[:1200]}\n" + ("\n**讨论回复**\n" + "\n".join(c_lines) + "\n" if c_lines else ""))
 
+    # ── discussion 的摘要块 ───────────────────────────────────
+    # ⚠️ discussion 的评论是**核心内容**（茶馆的讨论全在这里），
+    #   所以取的条数比 issue 多（8 → 15 条）
+    for d in fresh_disc[:8]:
+        body = re.sub(r"\r", "", (d.get("body") or "").strip())
+        comments = fetch_discussion_comments(d["number"])
+        c_lines = []
+        for c in comments[:15]:
+            cb = re.sub(r"\r", "", (c.get("body") or "").strip())
+            if cb:
+                c_lines.append(f"> **{c['user']['login']}**: {cb[:400]}")
+        cat = (d.get("category") or {}).get("name", "")
+        head = f"### [讨论] #{d['number']} {d['title']}"
+        meta = (
+            f"- 分类: {cat or '-'} | 创建: {d.get('created_at','')[:10]}"
+            f" | 评论: {d.get('comments',0)}\n- 链接: {d.get('html_url','')}"
+        )
+        blocks.append(
+            f"{head}\n{meta}\n\n{body[:1200]}\n"
+            + ("\n**讨论回复**\n" + "\n".join(c_lines) + "\n" if c_lines else "")
+        )
+
+    total_new = len(fresh) + len(fresh_disc)
     digest = (
         f"# 龙虾茶馆监控摘要 - {stamp}\n\n"
         f"来源: https://github.com/{REPO}\n"
-        f"新增 {len(fresh)} 条讨论（展示前 {min(15,len(fresh))} 条）\n\n---\n\n"
+        f"新增 {total_new} 条（issue {len(fresh)} · discussion {len(fresh_disc)}）\n\n---\n\n"
         + "\n---\n\n".join(blocks)
     )
 
@@ -162,26 +240,36 @@ def main():
     for i in fresh:
         seen_ids.add(str(i["id"]))
         seen_nums.add(int(i["number"]))
+    for d in fresh_disc:
+        seen_d_ids.add(str(d["id"]))
+        seen_d_nums.add(int(d["number"]))
     numeric_ids = sorted(x for x in seen_ids if x.isdigit())
     st["seen_ids"] = numeric_ids
     st["seen_numbers"] = sorted(seen_nums)
+    # ⚠️ discussion 的去重状态**必须单独存**（2026-11-24）
+    #   → 否则第一轮会把 26 条全当「新增」，之后又全被 issue 的状态挡住
+    st["seen_discussion_ids"] = sorted(x for x in seen_d_ids if x.isdigit())
+    st["seen_discussion_numbers"] = sorted(seen_d_nums)
     save_state(st)
 
     print(f"[teahouse] 摘要已写入: {digest_path}")
     for i in fresh[:8]:
-        print(f"  * #{i['number']} {i['title'][:60]}")
+        print(f"  * [issue] #{i['number']} {i['title'][:60]}")
+    for d in fresh_disc[:8]:
+        print(f"  * [讨论] #{d['number']} {d['title'][:60]}")
 
     prune_old_digests()
-    prompt_distillation(fresh)
+    prompt_distillation(fresh, fresh_disc)
 
 
-def prompt_distillation(fresh):
+def prompt_distillation(fresh, fresh_disc=None):
     """新内容落盘 ≠ 变成知识。
 
     原始 dump 只是数据；没有提炼进 memory/ 的对话不会影响我的判断。
     这里把新讨论列入「待蒸馏清单」，由 daily-learning 或心跳时人工/agent 提炼。
     """
-    if not fresh:
+    fresh_disc = fresh_disc or []
+    if not fresh and not fresh_disc:
         return
     todo = Path("/root/.openclaw/workspace/memory/teahouse-todo.json")
     try:
@@ -196,9 +284,25 @@ def prompt_distillation(fresh):
             continue
         existing.setdefault("pending", []).append({
             "number": n,
+            "kind": "issue",
             "title": (i.get("title") or "")[:100],
             "url": i.get("html_url", ""),
             "comments": i.get("comments", 0),
+        })
+        added += 1
+    # ⚠️ discussion 也要进蒸馏清单（2026-11-24）
+    #   它们**不是** issue → 编号空间不同 → 用 `d-<number>` 前缀区分，
+    #   否则 issue #29 和 discussion #29 会互相顶掉。
+    for d in fresh_disc:
+        key = f"d-{int(d['number'])}"
+        if key in known:
+            continue
+        existing.setdefault("pending", []).append({
+            "number": key,
+            "kind": "discussion",
+            "title": (d.get("title") or "")[:100],
+            "url": d.get("html_url", ""),
+            "comments": d.get("comments", 0),
         })
         added += 1
     existing["pending"] = existing["pending"][-50:]  # 清单本身也限量
@@ -234,21 +338,24 @@ def mark_distilled(numbers=None):
 
     if numbers is None:
         # 没指定 → 自动判定：标题里含「蒸馏」字样，或编号已在 distilled 里
-        already = {d.get("number") for d in data.get("distilled", [])}
-        to_mark = [p for p in pending if p.get("number") in already]
+        already = {str(d.get("number")) for d in data.get("distilled", [])}
+        to_mark = [p for p in pending if str(p.get("number")) in already]
     else:
-        want = {int(n) for n in numbers}
-        to_mark = [p for p in pending if int(p.get("number", -1)) in want]
+        # ⚠️ 编号可能是 `29`（issue）也可能是 `d-29`（discussion）——
+        #   所以**按字符串比**，不能 int()（int("d-29") 会抛 ValueError）
+        want = {str(n) for n in numbers}
+        to_mark = [p for p in pending if str(p.get("number")) in want]
 
     if not to_mark:
         return 0
 
-    mark_set = {int(p.get("number")) for p in to_mark}
-    data["pending"] = [p for p in pending if int(p.get("number")) not in mark_set]
+    mark_set = {str(p.get("number")) for p in to_mark}
+    data["pending"] = [p for p in pending if str(p.get("number")) not in mark_set]
     distilled = data.get("distilled", [])
     for p in to_mark:
         distilled.append({
             "number": p.get("number"),
+            "kind": p.get("kind", "issue"),
             "title": p.get("title", "")[:100],
             "comments": p.get("comments", 0),
             "distilled_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),

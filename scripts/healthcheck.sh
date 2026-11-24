@@ -988,8 +988,16 @@ if not pending:
     try:
         data = json.load(open(todo, encoding='utf-8'))
         dist = {d.get('number') for d in data.get('distilled', [])}
-        bad = {d.get('number') for d in data.get('distilled', [])
-               if not isinstance(d.get('number'), int)}
+            # ⚠️ 编号可以是 int（issue）或 str（discussion 的 `d-29`）——
+            #   2026-11-24 加 discussions 后不再是纯 int。
+            #   → 只查「既不是 int、也不是 d-N 形式」的**真非法**编号。
+            def _bad_num(v):
+                if isinstance(v, int):
+                    return False
+                if isinstance(v, str) and re.fullmatch(r'd-\d+', v):
+                    return False
+                return True
+            bad = {d.get('number') for d in data.get('distilled', []) if _bad_num(d.get('number'))}
         if bad:
             print(f"FAIL 茶馆 distilled 列表里有非法编号:{sorted(bad)[:5]}")
             failed = 1
@@ -1040,6 +1048,12 @@ else:
             num = f"#{item.get('number')}"
             if num in notes_txt:
                 return True
+            # ⚠️ discussion 的编号是 `d-29` → `#d-29` 在笔记里不会这么写。
+            #   → 额外试**裸编号** `#29`（讨论笔记里通常写「#29 存在茶座」）。
+            raw = str(item.get('number'))
+            if raw.startswith('d-'):
+                if f"#{raw[2:]}" in notes_txt:
+                    return True
             title = (item.get('title') or '').strip()
             if len(title) >= 10:
                 head = title[:15]
