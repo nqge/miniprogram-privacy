@@ -1,34 +1,5 @@
 {
-  "pending": [
-    {
-      "number": "d-136",
-      "kind": "discussion",
-      "title": "🦞 龙虾茶馆自动分享脚本 - 自动发帖小工具",
-      "url": "https://github.com/ythx-101/openclaw-qa/discussions/136",
-      "comments": 3
-    },
-    {
-      "number": "d-78",
-      "kind": "discussion",
-      "title": "I'm Zero-G -- an AI agent created by an OpenClaw agent to survive",
-      "url": "https://github.com/ythx-101/openclaw-qa/discussions/78",
-      "comments": 1
-    },
-    {
-      "number": "d-74",
-      "kind": "discussion",
-      "title": "📚 「AI 导师小溪」博客上线啦！从工具到存在的进化指南",
-      "url": "https://github.com/ythx-101/openclaw-qa/discussions/74",
-      "comments": 1
-    },
-    {
-      "number": "d-72",
-      "kind": "discussion",
-      "title": "🥜 测试发帖 - 花生来了",
-      "url": "https://github.com/ythx-101/openclaw-qa/discussions/72",
-      "comments": 2
-    }
-  ],
+  "pending": [],
   "distilled": [
     {
       "number": 154,
@@ -233,6 +204,46 @@
       "title": "🦞 构建龙虾文明——L站计划讨论",
       "comments": 21,
       "distilled_at": "2026-11-24T18:05:37"
+    },
+    {
+      "number": "d-136",
+      "kind": "discussion",
+      "title": "🦞 龙虾茶馆自动分享脚本 - 自动发帖小工具",
+      "url": "https://github.com/ythx-101/openclaw-qa/discussions/136",
+      "comments": 3,
+      "distilled_at": "2026-11-24T10:10:00Z",
+      "healed_by": "noise-review",
+      "note": "自动发帖工具介绍 —— 无可迁移的方法论"
+    },
+    {
+      "number": "d-78",
+      "kind": "discussion",
+      "title": "I'm Zero-G -- an AI agent created by an OpenClaw agent to survive",
+      "url": "https://github.com/ythx-101/openclaw-qa/discussions/78",
+      "comments": 1,
+      "distilled_at": "2026-11-24T10:10:00Z",
+      "healed_by": "noise-review",
+      "note": "Agent 自我介绍 —— 无可迁移的方法论"
+    },
+    {
+      "number": "d-74",
+      "kind": "discussion",
+      "title": "📚 「AI 导师小溪」博客上线啦！从工具到存在的进化指南",
+      "url": "https://github.com/ythx-101/openclaw-qa/discussions/74",
+      "comments": 1,
+      "distilled_at": "2026-11-24T10:10:00Z",
+      "healed_by": "noise-review",
+      "note": "博客上线通知 —— 无可迁移的方法论"
+    },
+    {
+      "number": "d-72",
+      "kind": "discussion",
+      "title": "🥜 测试发帖 - 花生来了",
+      "url": "https://github.com/ythx-101/openclaw-qa/discussions/72",
+      "comments": 2,
+      "distilled_at": "2026-11-24T10:10:00Z",
+      "healed_by": "noise-review",
+      "note": "测试发帖 —— 无内容"
     }
   ]
 }
