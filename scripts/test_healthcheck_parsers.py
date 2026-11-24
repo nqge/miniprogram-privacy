@@ -59,6 +59,36 @@ def main():
     h = re.search(r'当前条目数\*\*[\uff1a:](\d+) \u6761[\uff08(]E1[\u2013\-]E(\d+)[\uff09)]', lib)
     cases.append((h is not None, '【O】L1 主库「当前条目数」能解析'))
 
+    # 【X-HEREDOC】healthcheck.sh 里每个 python heredoc 块都**必须能编译**
+    # ⚠️ 2026-11-24 加（真实翻车）：
+    #   我给【I】组加了个 `_bad_num()` 辅助函数，**缩进写错了一级** →
+    #   整个【I】组的 Python 块 `IndentationError` →
+    #   而这组的输出被 `2>/dev/null` 吞掉 → **组里什么都没打印**，
+    #   但 `PASS=$((PASS + 1))` 照样执行 → **组照样计分** →
+    #   巡检报告显示「PASS=100 FAIL=0」，**看起来一切正常**。
+    #
+    #   → 这就是「装死的断言」的**最阴险版本**：
+    #     连「没输出」这个信号都被吞了，**失败得无声无息**。
+    #   → 修法：**每个 heredoc 块都要单独 compile() 一遍**，
+    #     编译不过 = 那一组已经死了 = 必须 FAIL。
+    try:
+        hc = read('scripts/healthcheck.sh')
+        blocks = []
+        for m in re.finditer(r"python3 - << 'PY'[^\n]*\n(.*?)\nPY(?:\n|\s*$)",
+                             hc, re.S):
+            blocks.append(m.group(1))
+        bad_blocks = []
+        for idx, b in enumerate(blocks, 1):
+            try:
+                compile(b, f'<heredoc#{idx}>', 'exec')
+            except SyntaxError as e:
+                bad_blocks.append(f'#{idx} 行{e.lineno}: {e.msg}')
+        cases.append((not bad_blocks,
+                      f'【X-HEREDOC】healthcheck.sh 的 {len(blocks)} 个 python 块都能编译'
+                      + (f'（坏: {bad_blocks}）' if bad_blocks else '')))
+    except Exception as e:
+        cases.append((False, f'【X-HEREDOC】heredoc 块扫描异常：{e}'))
+
     # 【O】三处计数必须一致
     if m1 and h:
         same = int(m1.group(1)) == int(h.group(1))

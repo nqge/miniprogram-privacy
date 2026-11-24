@@ -988,16 +988,19 @@ if not pending:
     try:
         data = json.load(open(todo, encoding='utf-8'))
         dist = {d.get('number') for d in data.get('distilled', [])}
-            # ⚠️ 编号可以是 int（issue）或 str（discussion 的 `d-29`）——
-            #   2026-11-24 加 discussions 后不再是纯 int。
-            #   → 只查「既不是 int、也不是 d-N 形式」的**真非法**编号。
-            def _bad_num(v):
-                if isinstance(v, int):
-                    return False
-                if isinstance(v, str) and re.fullmatch(r'd-\d+', v):
-                    return False
-                return True
-            bad = {d.get('number') for d in data.get('distilled', []) if _bad_num(d.get('number'))}
+        # ⚠️ 编号可以是 int（issue）或 str（discussion 的 `d-29`）——
+        #   2026-11-24 加 discussions 后不再是纯 int。
+        #   → 只查「既不是 int、也不是 d-N 形式」的**真非法**编号。
+        # ⚠️ 编号可以是 int（issue）或 str（discussion 的 `d-29`）——
+        #   2026-11-24 加 discussions 后不再是纯 int。
+        #   → 只查「既不是 int、也不是 d-N 形式」的**真非法**编号。
+        def _bad_num(v):
+            if isinstance(v, int):
+                return False
+            if isinstance(v, str) and re.fullmatch(r'd-\d+', v):
+                return False
+            return True
+        bad = {d.get('number') for d in data.get('distilled', []) if _bad_num(d.get('number'))}
         if bad:
             print(f"FAIL 茶馆 distilled 列表里有非法编号:{sorted(bad)[:5]}")
             failed = 1

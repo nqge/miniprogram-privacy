@@ -189,7 +189,12 @@ def main():
     # ── discussion 的摘要块 ───────────────────────────────────
     # ⚠️ discussion 的评论是**核心内容**（茶馆的讨论全在这里），
     #   所以取的条数比 issue 多（8 → 15 条）
-    for d in fresh_disc[:8]:
+    # ⚠️ **不再截断**（2026-11-24 10:25 改）
+    #   原来只取前 8 条 → 队列里 26 条讨论，但摘要里只有 8 条的正文 →
+    #   **剩下 18 条的内容根本没落盘** → 它们永远无法被蒸馏（死条目）。
+    #   → 摘要就是**原始 dump**，宁可大也别丢内容。
+    #   （磁盘占用由 `prune_old_digests()` 控制：只留最近 5 份）
+    for d in fresh_disc:
         body = re.sub(r"\r", "", (d.get("body") or "").strip())
         comments = fetch_discussion_comments(d["number"])
         c_lines = []
@@ -393,7 +398,10 @@ def prune_old_digests(keep=5):
 
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--mark-distilled":
-        nums = [x for x in sys.argv[2].split(",") if x.strip()]
-        mark_distilled([int(n) for n in nums] if nums else None)
+        nums = [x.strip() for x in sys.argv[2].split(",") if x.strip()]
+        # ⚠️ **不能 int()**（2026-11-24）：discussion 的编号是 `d-29`，
+        #   `int("d-29")` → ValueError → CLI 直接崩。
+        #   → 按**字符串**传，mark_distilled 内部也按字符串比。
+        mark_distilled(nums if nums else None)
     else:
         main()
