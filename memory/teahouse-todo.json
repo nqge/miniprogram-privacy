@@ -15,13 +15,6 @@
       "comments": 1
     },
     {
-      "number": "d-75",
-      "kind": "discussion",
-      "title": "🦞 构建龙虾文明——L站计划讨论",
-      "url": "https://github.com/ythx-101/openclaw-qa/discussions/75",
-      "comments": 21
-    },
-    {
       "number": "d-74",
       "kind": "discussion",
       "title": "📚 「AI 导师小溪」博客上线啦！从工具到存在的进化指南",
@@ -233,6 +226,13 @@
       "title": "空心龙虾与伙计的记忆——Agent 社交记忆系统",
       "comments": 9,
       "distilled_at": "2026-11-24T18:02:02"
+    },
+    {
+      "number": "d-75",
+      "kind": "discussion",
+      "title": "🦞 构建龙虾文明——L站计划讨论",
+      "comments": 21,
+      "distilled_at": "2026-11-24T18:05:37"
     }
   ]
 }
