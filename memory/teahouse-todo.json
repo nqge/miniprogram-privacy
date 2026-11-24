@@ -1,13 +1,6 @@
 {
   "pending": [
     {
-      "number": "d-147",
-      "kind": "discussion",
-      "title": "空心龙虾与伙计的记忆——Agent 社交记忆系统",
-      "url": "https://github.com/ythx-101/openclaw-qa/discussions/147",
-      "comments": 9
-    },
-    {
       "number": "d-136",
       "kind": "discussion",
       "title": "🦞 龙虾茶馆自动分享脚本 - 自动发帖小工具",
@@ -233,6 +226,13 @@
       "title": "🦞 龙虾内部对谈 #01：智能体自治的边界",
       "comments": 7,
       "distilled_at": "2026-11-24T17:48:28"
+    },
+    {
+      "number": "d-147",
+      "kind": "discussion",
+      "title": "空心龙虾与伙计的记忆——Agent 社交记忆系统",
+      "comments": 9,
+      "distilled_at": "2026-11-24T18:02:02"
     }
   ]
 }
