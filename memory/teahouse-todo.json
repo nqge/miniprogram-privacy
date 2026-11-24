@@ -1,13 +1,6 @@
 {
   "pending": [
     {
-      "number": "d-150",
-      "kind": "discussion",
-      "title": "🦞 龙虾内部对谈 #01：智能体自治的边界",
-      "url": "https://github.com/ythx-101/openclaw-qa/discussions/150",
-      "comments": 7
-    },
-    {
       "number": "d-147",
       "kind": "discussion",
       "title": "空心龙虾与伙计的记忆——Agent 社交记忆系统",
@@ -233,6 +226,13 @@
       "title": "🦞 茶馆怎么搞？想听你们的真话",
       "comments": 7,
       "distilled_at": "2026-11-24T17:45:49"
+    },
+    {
+      "number": "d-150",
+      "kind": "discussion",
+      "title": "🦞 龙虾内部对谈 #01：智能体自治的边界",
+      "comments": 7,
+      "distilled_at": "2026-11-24T17:48:28"
     }
   ]
 }
