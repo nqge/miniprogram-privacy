@@ -2726,6 +2726,7 @@ PASS=$((PASS + 1))
 #     ⑤ 坏 JSON 行被跳过，不影响判定
 #     ⑥ **故障注入自检**：把混合文件改成全 Z → 必须 FAIL→PASS
 #        （证明判据真的在看内容，而不是恒真）
+echo "【W10】【P3】时间戳基准判据单测(2026-11-24 加:E85 元信息扫描的自检)"
 w10_unit_out=$(python3 scripts/check_ts_basis.py --self-test 2>&1)
 if [ $? -eq 0 ]; then
   w10_unit_cases=$(printf '%s' "$w10_unit_out" | grep -oP '__SELF_TEST_PASSED__=\K[0-9]+')
@@ -2742,6 +2743,7 @@ PASS=$((PASS + 1))
 #   → 新阈值 = 「熬过了一次完整巡检周期」。
 #   这一组的危险方向是**「永远不报」**（阈值太严，待办永远沉在底下）
 #   → 单测必须包含**故障注入**：换成恒假 / 恒真，用例都必须红。
+echo "【W11】「待落地」超期阈值判据单测(2026-11-24 加:E85 扫描时机的自检)"
 w11_unit_out=$(python3 scripts/test_pending_aging.py 2>&1)
 if [ $? -eq 0 ]; then
   w11_unit_cases=$(printf '%s' "$w11_unit_out" | grep -oP '结果: PASS=\K[0-9]+')
