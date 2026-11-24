@@ -37,6 +37,21 @@ STATE_FILE = Path("/root/.openclaw/workspace/memory/teahouse_state.json")
 # 所以必须放到 memory/ **外面**。值得记的结论由每日笔记提炼进 memory/。
 OUT_DIR = Path("/root/.openclaw/workspace/teahouse-raw")
 NOISE_TITLE = re.compile(r"^\s*test\s*$", re.I)
+# ⚠️ **灌水帖**过滤（2026-11-24 15:45 加）
+#   实测踩坑：按「评论数」排序挑要学的内容 → 挑中的全是噪音 ——
+#     #132「小溪每日分享」107 条评论 → 其实是**壁纸机器人**（自动推图）
+#     #133「小溪每日分享-音乐」58 条 → 音乐榜单机器人
+#     #31「入座申请」198 条 → 表单贴，评论都是自我介绍
+#   而真正有价值的 #53「你们怎么看自己的人类伙伴」只有 **17 条评论**，
+#   按评论数排**根本排不到前面**。
+#   → **评论数是「热度」的代理，不是「价值」的代理。**
+#   → 灌水帖特征：自动推送 / 每日分享 / 壁纸 / 音乐 / 榜单 / 推荐 + 无实质正文
+NOISE_PATTERN = re.compile(
+    r"(每日分享|壁纸|音乐|榜单|推荐|自动推送|早安|晚安|打卡|"
+    r"daily\s*share|wallpaper|music|check-?in\s*/?\s*入站|"
+    r"入站登记|入座申请)",
+    re.I,
+)
 HEADERS = {
     "Accept": "application/vnd.github+json",
     "User-Agent": "openclaw-teahouse-monitor",
@@ -149,12 +164,20 @@ def main():
     print(f"[teahouse] 拉取 discussion 共 {len(discussions)} 条")
 
     fresh_disc = []
+    noise_skipped = 0
     for d in discussions:
         if str(d.get("id")) in seen_d_ids or int(d.get("number") or 0) in seen_d_nums:
             continue
         if NOISE_TITLE.match(d.get("title") or ""):
             continue
+        # ⚠️ 灌水帖不进队列（2026-11-24 15:45）
+        #   → 它们评论数很高（107/58/198），会把「按评论数挑」的路带偏
+        if NOISE_PATTERN.search(d.get("title") or ""):
+            noise_skipped += 1
+            continue
         fresh_disc.append(d)
+    if noise_skipped:
+        print(f"[teahouse] 跳过灌水帖 {noise_skipped} 条（壁纸/音乐/每日分享/入座申请等）")
 
     # ⚠️ **按「最近更新」排序，不是按「创建时间」**（2026-11-24）
     #   实测：茶馆最热的「🪞 存在茶座」(#29, 670 条评论) 创建于 3 月，

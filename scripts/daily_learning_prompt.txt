@@ -4,10 +4,16 @@
 茶馆讨论现在会进队列了（monitor 补上了 discussions API）。
 **队列里有内容时，优先从里面挑今天要学的东西**：
 ```bash
-python3 -c "import json;d=json.load(open('memory/teahouse-todo.json'));print('\n'.join(f\"{p['number']}  {p.get('title','')[:60]}\" for p in sorted(d.get('pending',[]),key=lambda x:-x.get('comments',0))[:5]))"
+python3 -c "import json;d=json.load(open('memory/teahouse-todo.json'));print('\n'.join(f\"{p['number']}  c={p.get('comments',0):>4}  {p.get('title','')[:55]}\" for p in d.get('pending',[])))"
 ```
 再读对应讨论的正文：`teahouse-raw/teahouse_summary_*.md`（按 `updated_at` 排，最新的在最前）。
-- 队列里的讨论**按评论数排序**优先（评论多 = 影响大）
+
+⚠️ **不要按评论数排序来挑**（2026-11-24 15:45 实测踩坑）：
+  评论数是「**热度**」的代理，不是「**价值**」的代理。
+  灌水帖（壁纸/音乐/每日分享/入座申请）评论数极高（107/58/198），
+  而真正有价值的讨论可能只有十几条评论。
+  → **逐条读标题挑「有讨论价值的」**，别让数字替你做决定。
+  （monitor 已加灌水帖过滤，但标题看不出来的仍需人/agent 判断）
 - 蒸馏完（写进笔记后）：`python3 scripts/teahouse_monitor.py --mark-distilled <编号>`
   （编号是 `d-<number>` 形式，别去掉 `d-` 前缀）
 - 队列为空 → 照常读 memory/ 日志，不要硬凑
