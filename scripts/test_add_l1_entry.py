@@ -207,6 +207,136 @@ def test_entry_files_single_kw_line():
 
 
 # ─────────────────────────────────────────────────────────────
+# 计数同步（2026-11-26 加，E89）
+# ─────────────────────────────────────────────────────────────
+def test_sync_updates_all_four_counts():
+    """入库后 **4 处计数**必须全部一致 —— 这是 11-25 FAIL=3 的根因防线。
+
+    ## 为什么加这条
+
+    11-25 手工加 E88（**绕过 add_l1_entry.py**）→ 主库头部手写成 88，
+    `MEMORY.md` 两处数字还写着 87 → 次日巡检 FAIL=3：
+      【O】MEMORY.md 声明 87 条，实际 88 条
+      【O】MEMORY.md 自检声明 87/87
+      【X】把【O】的失败**误报成「巡检解析器坏了」**（实际解析器 14 项全绿）
+
+    → 所以「走脚本」是唯一的防线。
+    → 这条测试锁住脚本的**同步行为**：4 处计数该一起变。
+
+    ## 测法：不碰真实文件
+
+    把 4 个真实文件**复制到 tmp**，把被测模块的路径常量**指过去**，
+    故意写一个**过期的计数**，跑同步函数，再验 4 处都变成新的。
+    → 用「过期 → 同步 → 全一致」的全过程，而不是只测单个正则。
+    """
+    import shutil
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        (tmp / "memory" / "L1-entries").mkdir(parents=True)
+        # 造 3 个独立文件 → 期望同步成 3
+        for i in (1, 2, 3):
+            (tmp / "memory" / "L1-entries" / f"E{i}.md").write_text(
+                f"### E{i}：标题\n\n> 本条讲：**关键词{i}**\n\n正文。\n", encoding="utf-8")
+
+        lib = tmp / "memory" / "L1-experience-library.md"
+        lib.write_text(
+            "> **当前条目数**：99 条（E1–E99）\n"
+            "> **检索自检**：`python3 scripts/verify_l1_retrieval.py` → 必须 99/99 可被检索\n",
+            encoding="utf-8")
+        mem = tmp / "MEMORY.md"
+        mem.write_text(
+            "| **L1** | `memory/L1-entries/E*.md` | **我学到的方法论**（99 条，E1–E99） | 跨日复用 |\n"
+            "### 检索自检（必须 99/99）\n",
+            encoding="utf-8")
+
+        # 把被测模块的路径常量指到 tmp
+        # （sync_main_lib / sync_memory 直接用模块全局 MAIN_LIB / MEMORY / ENTRIES，
+        #   没有路径参数 —— 所以必须改全局指向，这是唯一正确的隔离方式）
+        old = (mod.ENTRIES, mod.MAIN_LIB, mod.MEMORY)
+        mod.ENTRIES = tmp / "memory" / "L1-entries"
+        mod.MAIN_LIB = lib
+        mod.MEMORY = mem
+        try:
+            n_files = len(list(mod.ENTRIES.glob("E*.md")))
+            max_e = max(int(p.stem[1:]) for p in mod.ENTRIES.glob("E*.md"))
+            mod.sync_main_lib("E1", "标题", "正文。", "关键词1")
+            mod.sync_memory(n_files, max_e)
+        finally:
+            mod.ENTRIES, mod.MAIN_LIB, mod.MEMORY = old
+
+        lib_text = lib.read_text(encoding="utf-8")
+        mem_text = mem.read_text(encoding="utf-8")
+
+        m_h = re.search(r"当前条目数\*\*[：:]\s*(\d+)\s*条[（(]E1[–\-]E(\d+)[）)]", lib_text)
+        # 主库的「检索自检」行格式是「→ 必须 N/N 可被检索」（**没有括号**），
+        # 与 MEMORY.md 的「检索自检（必须 N/N）」不同 —— 所以要用两种正则分别抓。
+        m_l = re.search(r"检索自检[^\n]*?必须\s*(\d+)/\d+", lib_text)
+        m_m1 = re.search(r"[（(](\d+)\s*条[，,]E1[–\-]E(\d+)[）)]", mem_text)
+        m_m2 = re.search(r"检索自检[（(]必须\s*(\d+)/\d+[）)]", mem_text)
+
+        check(
+            "计数同步：主库头部「当前条目数」被同步",
+            bool(m_h) and int(m_h.group(1)) == n_files and int(m_h.group(2)) == max_e,
+            f"实际 {m_h.groups() if m_h else None}，期望 ({n_files}, {max_e})",
+        )
+        check(
+            "计数同步：主库「检索自检」行被同步",
+            bool(m_l) and int(m_l.group(1)) == n_files,
+            f"实际 {m_l.group(1) if m_l else None}，期望 {n_files}",
+        )
+        check(
+            "计数同步：MEMORY.md 表格行被同步",
+            bool(m_m1) and int(m_m1.group(1)) == n_files and int(m_m1.group(2)) == max_e,
+            f"实际 {m_m1.groups() if m_m1 else None}，期望 ({n_files}, {max_e})",
+        )
+        check(
+            "计数同步：MEMORY.md 自检行被同步",
+            bool(m_m2) and int(m_m2.group(1)) == n_files,
+            f"实际 {m_m2.group(1) if m_m2 else None}，期望 {n_files}",
+        )
+
+        mod.ENTRIES, mod.MAIN_LIB, mod.MEMORY = old
+
+
+def test_real_repo_counts_in_sync():
+    """真实仓库当前 4 处计数必须一致（这是巡检【O】的前置，不是替代）。
+
+    → 巡检每天 07:00 跑一次，是**事后**发现；
+    → 这条是**随时**可跑的前置检查，防止带着漂移提交。
+    """
+    ents = ROOT / "memory" / "L1-entries"
+    files = list(ents.glob("E*.md"))
+    n_files = len(files)
+    max_e = max((int(p.stem[1:]) for p in files), default=0)
+
+    lib = (ROOT / "memory" / "L1-experience-library.md").read_text(encoding="utf-8")
+    mem = (ROOT / "MEMORY.md").read_text(encoding="utf-8")
+
+    h = re.search(r"当前条目数\*\*[：:]\s*(\d+)\s*条[（(]E1[–\-]E(\d+)[）)]", lib)
+    l = re.search(r"检索自检[^\n]*?必须\s*(\d+)/\d+", lib)
+    m1 = re.search(r"[（(](\d+)\s*条[，,]E1[–\-]E(\d+)[）)]", mem)
+    m2 = re.search(r"检索自检[（(]必须\s*(\d+)/\d+[）)]", mem)
+
+    bad = []
+    if not h or int(h.group(1)) != n_files or int(h.group(2)) != max_e:
+        bad.append(f"主库头部 {h.groups() if h else None}")
+    if not l or int(l.group(1)) != n_files:
+        bad.append(f"主库自检行 {l.group(1) if l else None}")
+    if not m1 or int(m1.group(1)) != n_files or int(m1.group(2)) != max_e:
+        bad.append(f"MEMORY 表格行 {m1.groups() if m1 else None}")
+    if not m2 or int(m2.group(1)) != n_files:
+        bad.append(f"MEMORY 自检行 {m2.group(1) if m2 else None}")
+
+    check(
+        "真实仓库 4 处计数一致（防带着漂移提交）",
+        not bad,
+        f"不一致: {bad}（实际 {n_files} 条 / E1–E{max_e}）",
+    )
+
+
+# ─────────────────────────────────────────────────────────────
 # 判据自身不能装死（防止断言永远通过）
 # ─────────────────────────────────────────────────────────────
 def test_assertion_is_not_dead():
@@ -254,6 +384,8 @@ def main():
     test_main_lib_block_idempotent()
     test_existing_library_clean()
     test_entry_files_single_kw_line()
+    test_sync_updates_all_four_counts()
+    test_real_repo_counts_in_sync()
     test_assertion_is_not_dead()
     print("=" * 60)
     print(f" 结果: PASS={PASS} FAIL={FAIL}")

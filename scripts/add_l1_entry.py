@@ -184,6 +184,18 @@ def sync_main_lib(eid: str, title: str, entry_body: str | None,
     text = re.sub(r"当前条目数\*\*[：:]\s*\d+\s*条[（(]E1[–\-]E\d+[）)]",
                   f"当前条目数**：{n_files} 条（E1–E{max_e}）", text)
 
+    # 更新头部「检索自检」行 → 必须 N/N 可被检索
+    # ⚠️ 2026-11-26 加（E89）：这一行**原来从来没被脚本同步过** ——
+    #   实测 11-25 手工加 E88 后，主库「当前条目数」=88，
+    #   但主库这行还写着 77/77（更早的历史遗留），MEMORY.md 两处还写着 87。
+    #   → 一条经验入库要改的计数是 **4 处**，不是 3 处。
+    #   → 少同步一处，那处就会静默烂掉（没有任何断言覆盖它）。
+    # ⚠️ 正则要跨过中间的 `code` 反引号：
+    #   实际行是「**检索自检**：`python3 scripts/verify_l1_retrieval.py` → 必须 89/89 可被检索」
+    #   所以不能用 [^`] 排除反引号，要用「不跨行」+ 允许任意字符。
+    text = re.sub(r"(检索自检[^\n]*?必须\s*)\d+/\d+",
+                  rf"\g<1>{n_files}/{n_files}", text)
+
     if text != orig:
         MAIN_LIB.write_text(text, encoding="utf-8")
         return True

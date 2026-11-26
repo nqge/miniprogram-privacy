@@ -44,6 +44,19 @@ python3 -c "import json;d=json.load(open('memory/teahouse-todo.json'));print('\n
   （短小节夹在长文档中间会被切碎稀释，独立文件 = 独立块 = 条目自带完整语义）
 两处内容保持一致；不要新建其他文件。
 
+【重建索引 —— 2026-11-26 加（E89）】⚠️ **不要用 `memory index --force`**
+- 现象（11-25、11-26 连续两天实测）：清空 embedding cache 后全量重建 →
+  MiniMax 侧返回 `rate limit exceeded(RPM)` → **索引失败**，
+  而 `memory status --deep` 仍报 `Dirty: no`（**那是增量状态位，不是完整性断言**）。
+- 代价：daily-learning 耗时从稳定的 ~250s 涨到 **575s → 1151s**
+  （超时 1800s，**只剩 649s 余量**）—— 全花在 sleep + 重试上。
+- **正确做法**：**增量** `openclaw memory index`（**不清缓存**）。
+  缓存里已有几百条，只有新增的几个文件需要嵌入 → 几秒完成，不撞限流。
+- 只有当**改了已入库文件的正文**（而不是新增文件）才需要重建，
+  且优先增量；确需 `--force` 时，清完缓存**立刻增量索引**，不要反复重试。
+- **判据**：`Dirty: no` **不能**当作「新文件已可搜」的证据 ——
+  必须用一次真实检索确认（`openclaw memory search "<原文措辞>" --json` 看排第几）。
+
 【先落盘再总结 — 2026-11-09 加（E68）】⚠️ **两处都要先写进文件，再输出总结**
 - 2026-11-09 实测：daily-learning 历史上 **7 次**「声称已写入 memory/YYYY-MM-DD.md」，
   但**文件从未存在** —— 正文随会话一起丢了（run 到了 256~371s 才被限流掐死）
@@ -55,11 +68,19 @@ python3 -c "import json;d=json.load(open('memory/teahouse-todo.json'));print('\n
 
 【L1 经验库提升】
 判断今天这条是否属于「可复用方法论」—— 换个场景仍成立 + 能指导具体动作 + 有明确触发条件。
-- 若属于 → 在 memory/L1-experience-library.md 对应分类下新增一条（场景/陷阱/岔路口 三段式），
-  并在今天的小节里注明「已提升至 L1：E<N>」
+- 若属于 → **必须用入库脚本，不要手工编辑**（2026-11-26 加，E89）：
+  ```
+  python3 scripts/add_l1_entry.py --id E<N> --file memory/L1-entries/E<N>.md
+  ```
+  脚本会自动同步 **4 处计数**（主库头部「当前条目数」/ 主库「检索自检」行 /
+  `MEMORY.md` 的「N 条，E1–E<N>」/ `MEMORY.md` 的「检索自检（必须 N/N）」）。
+  ⚠️ **手工编辑一定会漏** —— 11-25 手工加 E88 就漏了 MEMORY.md 两处，
+  次日巡检直接 FAIL=3（【O】计数不一致 + 【X】把【O】的失败误报成「解析器坏了」）。
+- 然后在今天的小节里注明「已提升至 L1：E<N>」
 - 若不属于 → 不要硬塞进 L1
 - L1 里的旧条目不要删除，除非已被证伪
 - 提升后必须用原文措辞检索一次，确认排进前列；排不进就重写标题与措辞
+- 提交前确认 4 处计数一致：`python3 scripts/test_healthcheck_parsers.py`（含【O】一致性）
 
 【自愈要求】
 先检查 memory/ 下最近 3 天的 .md 是否都存在且含「学习」小节：

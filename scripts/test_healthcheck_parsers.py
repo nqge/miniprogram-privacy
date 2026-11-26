@@ -59,6 +59,13 @@ def main():
     h = re.search(r'当前条目数\*\*[\uff1a:](\d+) \u6761[\uff08(]E1[\u2013\-]E(\d+)[\uff09)]', lib)
     cases.append((h is not None, '【O】L1 主库「当前条目数」能解析'))
 
+    # 【O】L1 主库的「检索自检」行（2026-11-26 加，E89）
+    # ⚠️ 这一行**原来既没有断言、也没被入库脚本同步** → 静默烂到 77/77。
+    #   格式与 MEMORY.md 那行**不同**（没有括号）→ 必须单独一个正则，
+    #   而且它的解析器也要被本自检覆盖，否则新加的断言可能一装死就没人知道。
+    hl = re.search(r'检索自检[^\n]*?必须\s*(\d+)/(\d+)', lib)
+    cases.append((hl is not None, '【O】L1 主库「检索自检」能解析'))
+
     # 【X-HEREDOC】healthcheck.sh 里每个 python heredoc 块都**必须能编译**
     # ⚠️ 2026-11-24 加（真实翻车）：
     #   我给【I】组加了个 `_bad_num()` 辅助函数，**缩进写错了一级** →
@@ -162,6 +169,42 @@ def main():
     # 【W】判据单测文件本身存在且可运行
     cases.append((os.path.exists(os.path.join(WS, 'scripts/test_v_poll_assertion.py')),
                   '【W】判据单测文件存在'))
+
+    # 【U】耗时递增趋势判据 —— 必须会「区分」而不是恒真/恒假
+    # ⚠️ 2026-11-26 加（E89）：
+    #   daily-learning 耗时 215s→575s→1151s（timeout 1800s），
+    #   但「最后一次占用率」只有 64% < 70% → 旧判据完全看不出问题。
+    #   → 新判据看**趋势**。但趋势判据最容易犯的错是**恒真**（每次都报）
+    #     或**恒假**（永远不报）—— 所以这里两条都要验。
+    try:
+        def _trend_fires(recent):
+            if len(recent) != 3:
+                return False
+            return (recent[0] < recent[1] < recent[2]
+                    and (recent[2] - recent[0]) / recent[0] * 100 >= 50)
+
+        # 真阳性：真实回归序列必须报
+        cases.append((_trend_fires([215, 575, 1151]),
+                      '【U】耗时递增趋势判据能抓住真实回归(215→575→1151)'))
+        # 真阴性：稳定期序列必须**不**报（防恒真）
+        cases.append((not _trend_fires([250, 240, 215]),
+                      '【U】耗时递增趋势判据对稳定序列不误报(250→240→215)'))
+        # 真阴性：持平序列必须不报
+        cases.append((not _trend_fires([200, 200, 200]),
+                      '【U】耗时递增趋势判据对持平序列不误报(200→200→200)'))
+        # 真阴性：小幅波动（<50%）必须不报
+        cases.append((not _trend_fires([200, 220, 240]),
+                      '【U】耗时递增趋势判据对小幅波动不误报(200→220→240, 涨20%)'))
+    except Exception as e:
+        cases.append((False, f'【U】趋势判据自检异常：{type(e).__name__}: {e}'))
+
+    # 【U】趋势判据必须真的写在 healthcheck.sh 里（防只测副本）
+    try:
+        hc_src = read('scripts/healthcheck.sh')
+        has_trend = ('util_trend' in hc_src and '耗时递增趋势' in hc_src)
+        cases.append((has_trend, '【U】耗时递增趋势判据已落在 healthcheck.sh 里'))
+    except Exception as e:
+        cases.append((False, f'【U】趋势判据落地检查异常：{e}'))
 
     ok = True
     for good, desc in cases:

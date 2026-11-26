@@ -1702,6 +1702,7 @@ for j in jobs:
 
 runs_dir = '/root/.openclaw/cron/runs'
 util = []
+util_trend = []
 for j in jobs:
     name = j.get('name')
     tos = tos_map.get(name) or 0
@@ -1709,6 +1710,7 @@ for j in jobs:
         continue
     rp = os.path.join(runs_dir, f"{j.get('id')}.jsonl")
     best = None
+    hist = []
     try:
         with open(rp, encoding='utf-8', errors='replace') as fh:
             for line in fh:
@@ -1723,12 +1725,34 @@ for j in jobs:
                 # 只看成功的运行(失败的耗时是「烧满 timeout」,不反映真实负载)
                 if r.get('status') != 'ok':
                     continue
+                hist.append((at, dur))
                 if best is None or at > best[0]:
                     best = (at, dur)
     except Exception:
         continue
     if best and best[1] > 0:
         util.append((name, best[1] / 1000.0 / tos * 100, tos, best[1] / 1000.0))
+        # 递增趋势（2026-11-26 加，E89）
+        # ⚠️ 为什么「只看最后一次」不够：
+        #   11-26 实测 daily-learning 耗时 215s → 575s → 1151s（timeout 1800s）。
+        #   最后一次占用率只有 64%，**低于 70% 阈值 → 看不出问题**，
+        #   但它 2 天内涨了 5.3 倍，**余量只剩 649s** —— 再涨一次就撞超时。
+        #   → 所以要**看趋势**：连续 3 次成功运行耗时递增，且增幅显著。
+        hist.sort()
+        recent = [d / 1000.0 for _, d in hist[-3:]]
+        if len(recent) == 3 and recent[0] < recent[1] < recent[2]:
+            grow = (recent[2] - recent[0]) / recent[0] * 100 if recent[0] else 0
+            if grow >= 50:
+                util_trend.append((name, recent, tos, grow))
+
+if util_trend:
+    for tname, recent, tos, grow in util_trend:
+        print(f"WARN 耗时递增趋势:{tname} 最近 3 次 "
+              f"{recent[0]:.0f}s→{recent[1]:.0f}s→{recent[2]:.0f}s"
+              f"(涨 {grow:.0f}%,timeout {tos}s,余量 {tos - recent[2]:.0f}s) "
+              f"-- 连续 2 天涨这个量级,下次可能撞超时")
+else:
+    print("PASS 无耗时递增趋势")
 
 if util:
     util.sort(key=lambda x: -x[1])
@@ -3166,6 +3190,18 @@ try:
     if h:
         if int(h.group(1)) != n_files or int(h.group(2)) != real_max:
             problems.append(f"L1 主库头部声明 {h.group(1)} 条/E1-E{h.group(2)},实际 {n_files} 条/E1-E{real_max}")
+    # L1 主库的「检索自检」行（2026-11-26 加，E89）
+    # ⚠️ 这一行**原来没有任何断言覆盖** → 它静默烂到了 77/77（11-25 实测）。
+    #   而且入库脚本 add_l1_entry.py **原来也不同步它**（只同步「当前条目数」）→
+    #   所以光靠「走脚本」也救不了它，必须单独断言。
+    #   注意格式：主库这行是「→ 必须 N/N 可被检索」（**没有括号**），
+    #   与 MEMORY.md 的「检索自检（必须 N/N）」不同 → 两种正则要分别写。
+    hl = re.search(r'检索自检[^\n]*?必须\s*(\d+)/(\d+)', lib)
+    if hl:
+        if int(hl.group(1)) != n_files or int(hl.group(2)) != n_files:
+            problems.append(f"L1 主库自检行声明 {hl.group(1)}/{hl.group(2)},实际应为 {n_files}/{n_files}")
+    else:
+        problems.append("L1 主库「检索自检」行**解析不到** —— 格式可能变了（防断言装死）")
 except Exception as e:
     problems.append(f"读 MEMORY.md 失败: {type(e).__name__}")
 
