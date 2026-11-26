@@ -14,7 +14,7 @@
 
 > **当前条目数**：88 条（E1–E88）· 每条在 `memory/L1-entries/` 有**独立文件**
 > （短条目夹在长文档里会被切碎稀释 —— 见 E17）
-> **检索自检**：`python3 scripts/verify_l1_retrieval.py` → 必须 77/77 可被检索
+> **检索自检**：`python3 scripts/verify_l1_retrieval.py` → 必须 88/88 可被检索
 
 ---
 
