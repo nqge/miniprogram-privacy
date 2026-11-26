@@ -173,36 +173,56 @@ def main():
     # 【U】耗时递增趋势判据 —— 必须会「区分」而不是恒真/恒假
     # ⚠️ 2026-11-26 加（E89）：
     #   daily-learning 耗时 215s→575s→1151s（timeout 1800s），
-    #   但「最后一次占用率」只有 64% < 70% → 旧判据完全看不出问题。
-    #   → 新判据看**趋势**。但趋势判据最容易犯的错是**恒真**（每次都报）
-    #     或**恒假**（永远不报）—— 所以这里两条都要验。
+    #   但「最后一次占用率」只有 64% < 70% → 只看最后一次的判据看不出问题。
+    # → 所以要验**趋势**判据。但趋势判据最容易犯的错是**恒真**（每次都报）
+    #   或**恒假**（永远不报）—— 所以真阳性 + 真阴性都要验。
+    #
+    # ⚠️ 2026-11-26 修正：**必须 import 真身**（scripts/timeout_margin.py），
+    #   不能在这里抄一份判据 —— 抄版会和真版悄悄漂移（同 E11/E61 的教训）。
+    #   而且判据真身**本来就已经有趋势检测**（E72 抽出来时就带了），
+    #   我一度在 healthcheck.sh 里又写了一份 → 重复实现，已删。
     try:
-        def _trend_fires(recent):
-            if len(recent) != 3:
-                return False
-            return (recent[0] < recent[1] < recent[2]
-                    and (recent[2] - recent[0]) / recent[0] * 100 >= 50)
+        import importlib.util
+        tm_spec = importlib.util.spec_from_file_location(
+            'timeout_margin', os.path.join(WS, 'scripts', 'timeout_margin.py'))
+        tm = importlib.util.module_from_spec(tm_spec)
+        tm_spec.loader.exec_module(tm)
 
-        # 真阳性：真实回归序列必须报
-        cases.append((_trend_fires([215, 575, 1151]),
-                      '【U】耗时递增趋势判据能抓住真实回归(215→575→1151)'))
+        _day = 86400000
+
+        def _trend_warns(durs, tsec=1800):
+            ds = [(i * _day, int(d * 1000), 'ok', None, 'delivered')
+                  for i, d in enumerate(durs)]
+            return tm.judge_u(ds, tsec)['warns']
+
+        # 真阳性：真实回归序列必须报「递增」
+        cases.append((any('递增' in w for w in _trend_warns([215, 575, 1151])),
+                      '【U】趋势判据能抓住真实回归(215→575→1151)'))
         # 真阴性：稳定期序列必须**不**报（防恒真）
-        cases.append((not _trend_fires([250, 240, 215]),
-                      '【U】耗时递增趋势判据对稳定序列不误报(250→240→215)'))
+        cases.append((not any('递增' in w for w in _trend_warns([250, 240, 215])),
+                      '【U】趋势判据对稳定序列不误报(250→240→215)'))
         # 真阴性：持平序列必须不报
-        cases.append((not _trend_fires([200, 200, 200]),
-                      '【U】耗时递增趋势判据对持平序列不误报(200→200→200)'))
-        # 真阴性：小幅波动（<50%）必须不报
-        cases.append((not _trend_fires([200, 220, 240]),
-                      '【U】耗时递增趋势判据对小幅波动不误报(200→220→240, 涨20%)'))
+        cases.append((not any('递增' in w for w in _trend_warns([200, 200, 200])),
+                      '【U】趋势判据对持平序列不误报(200→200→200)'))
+        # 真阳性：余量 < 上次涨幅 → 必须报「余量告急」（行动信号，不是观察信号）
+        cases.append((any('余量告急' in w for w in _trend_warns([575, 1151, 1700])),
+                      '【U】余量告急判据能抓住「下一次就撞」(575→1151→1700)'))
+        # 真阴性：余量还够 → 不报「余量告急」（防恒真）
+        cases.append((not any('余量告急' in w for w in _trend_warns([215, 575, 1151])),
+                      '【U】余量告急判据对余量充足序列不误报(215→575→1151)'))
     except Exception as e:
         cases.append((False, f'【U】趋势判据自检异常：{type(e).__name__}: {e}'))
 
-    # 【U】趋势判据必须真的写在 healthcheck.sh 里（防只测副本）
+    # 【U】趋势判据必须落在**真身**里，且 healthcheck.sh **不得**再有第二份实现
+    # ⚠️ 防「抄版判据」：一旦 healthcheck.sh 里出现第二份 util_trend 实现，
+    #   两份逻辑会各说各话 → 报告里同一件事出两行、或一行都不出。
     try:
+        tm_src = read('scripts/timeout_margin.py')
         hc_src = read('scripts/healthcheck.sh')
-        has_trend = ('util_trend' in hc_src and '耗时递增趋势' in hc_src)
-        cases.append((has_trend, '【U】耗时递增趋势判据已落在 healthcheck.sh 里'))
+        cases.append(('余量告急' in tm_src,
+                      '【U】余量告急判据已落在 timeout_margin.py（真身）里'))
+        cases.append(('util_trend' not in hc_src,
+                      '【U】healthcheck.sh 里没有第二份趋势实现（防抄版判据）'))
     except Exception as e:
         cases.append((False, f'【U】趋势判据落地检查异常：{e}'))
 

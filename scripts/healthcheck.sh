@@ -1702,7 +1702,6 @@ for j in jobs:
 
 runs_dir = '/root/.openclaw/cron/runs'
 util = []
-util_trend = []
 for j in jobs:
     name = j.get('name')
     tos = tos_map.get(name) or 0
@@ -1710,7 +1709,6 @@ for j in jobs:
         continue
     rp = os.path.join(runs_dir, f"{j.get('id')}.jsonl")
     best = None
-    hist = []
     try:
         with open(rp, encoding='utf-8', errors='replace') as fh:
             for line in fh:
@@ -1725,35 +1723,12 @@ for j in jobs:
                 # 只看成功的运行(失败的耗时是「烧满 timeout」,不反映真实负载)
                 if r.get('status') != 'ok':
                     continue
-                hist.append((at, dur))
                 if best is None or at > best[0]:
                     best = (at, dur)
     except Exception:
         continue
     if best and best[1] > 0:
         util.append((name, best[1] / 1000.0 / tos * 100, tos, best[1] / 1000.0))
-        # 递增趋势（2026-11-26 加，E89）
-        # ⚠️ 为什么「只看最后一次」不够：
-        #   11-26 实测 daily-learning 耗时 215s → 575s → 1151s（timeout 1800s）。
-        #   最后一次占用率只有 64%，**低于 70% 阈值 → 看不出问题**，
-        #   但它 2 天内涨了 5.3 倍，**余量只剩 649s** —— 再涨一次就撞超时。
-        #   → 所以要**看趋势**：连续 3 次成功运行耗时递增，且增幅显著。
-        hist.sort()
-        recent = [d / 1000.0 for _, d in hist[-3:]]
-        if len(recent) == 3 and recent[0] < recent[1] < recent[2]:
-            grow = (recent[2] - recent[0]) / recent[0] * 100 if recent[0] else 0
-            if grow >= 50:
-                util_trend.append((name, recent, tos, grow))
-
-if util_trend:
-    for tname, recent, tos, grow in util_trend:
-        print(f"WARN 耗时递增趋势:{tname} 最近 3 次 "
-              f"{recent[0]:.0f}s→{recent[1]:.0f}s→{recent[2]:.0f}s"
-              f"(涨 {grow:.0f}%,timeout {tos}s,余量 {tos - recent[2]:.0f}s) "
-              f"-- 连续 2 天涨这个量级,下次可能撞超时")
-else:
-    print("PASS 无耗时递增趋势")
-
 if util:
     util.sort(key=lambda x: -x[1])
     top = util[0]

@@ -159,6 +159,23 @@ def judge_u(ds, tsec):
                 f"{recent[0]/1000:.0f}s→{recent[1]/1000:.0f}s→{recent[2]/1000:.0f}s"
                 f"(超时 {tsec}s)-- 在长"
             )
+            # 2026-11-26 加（E89）：把**还能涨多少**说出来。
+            # ⚠️ 为什么加这个：
+            #   11-26 实测 215s→575s→1151s（timeout 1800s）。
+            #   光说「在长」不够 —— 关键是「**离撞超时还差多少**」。
+            #   本例余量只剩 649s，而前两次的涨幅是 +360s、+576s →
+            #   **照这个斜率，下一次就撞了** → 这是「该现在动手」的信号，
+            #   而不是「在长」这种可以再观察两周的信号。
+            # → 余量 + 上一次涨幅 一起比：余量 < 上一次涨幅 = 下次就撞。
+            headroom = tsec - recent[2] / 1000.0
+            last_growth = (recent[2] - recent[1]) / 1000.0
+            detail.update(trend_headroom_s=headroom, trend_last_growth_s=last_growth)
+            if last_growth > 0 and headroom < last_growth:
+                warns.append(
+                    f"⚠️ 余量告急:上次涨了 {last_growth:.0f}s，"
+                    f"而只剩 {headroom:.0f}s 余量(超时 {tsec}s) —— "
+                    f"照这个斜率**下一次就撞**"
+                )
 
     # 因超时而失败的（只看最近一次）
     # ⚠️ 两个坑叠在一起，**旧判据从来没触发过**（2026-11-16 发现）：
@@ -287,6 +304,33 @@ def self_test() -> int:
     ]
     r10 = judge_u(ds10, 1800)
     assert not any("递增" in w for w in r10["warns"]), r10["warns"]
+
+    # 12) 余量告急（2026-11-26 加，E89）：斜率快到「下一次就撞」时要单独说
+    # ⚠️ 为什么要单独判：
+    #   「在长」是个**观察信号**（可以再观察两周）；
+    #   而「余量 < 上次涨幅」是**行动信号** —— 照这个斜率下一次就撞超时，
+    #   得现在动手。两个强度混在一句话里，人会当成同一件事。
+    ds12 = [
+        (0, 575_000, "ok", None, "delivered"),
+        (day, 1_151_000, "ok", None, "delivered"),
+        (2 * day, 1_700_000, "ok", None, "delivered"),
+    ]
+    r12 = judge_u(ds12, 1800)
+    assert any("余量告急" in w for w in r12["warns"]), r12["warns"]
+    assert abs(r12["detail"]["trend_headroom_s"] - 100.0) < 1, r12["detail"]
+    assert abs(r12["detail"]["trend_last_growth_s"] - 549.0) < 1, r12["detail"]
+
+    # 13) 反向：余量还够 → **不能**报「余量告急」（防恒真）
+    #     11-26 真实序列：215→575→1151，余量 649 > 上次涨幅 576 → 不报
+    ds13 = [
+        (0, 215_000, "ok", None, "delivered"),
+        (day, 575_000, "ok", None, "delivered"),
+        (2 * day, 1_151_000, "ok", None, "delivered"),
+    ]
+    r13 = judge_u(ds13, 1800)
+    assert not any("余量告急" in w for w in r13["warns"]), r13["warns"]
+    # 但「在长」仍要报（趋势本身是真的）
+    assert any("递增" in w for w in r13["warns"]), r13["warns"]
 
     # 11) 基线高 → 样本充足时必须 FAIL
     ds11 = [
