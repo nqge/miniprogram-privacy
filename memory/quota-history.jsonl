@@ -224,3 +224,5 @@
 {"ts": "2026-11-27T11:27:29Z", "state": "quota_exhausted", "detail": "⚠️  WARN  minimax 限流（HTTP 429）{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)\"},\"request_id\":\"07589c2074c1ab485588c0075c2"}
 {"ts": "2026-11-27T11:58:27Z", "state": "quota_exhausted", "detail": "⚠️  WARN  minimax 限流（HTTP 429）{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)\"},\"request_id\":\"0758a363bef0c109c16110b167d"}
 {"ts": "2026-11-27T12:29:36Z", "state": "ok", "detail": "有可用 provider"}
+{"ts": "2026-11-27T13:00:31Z", "state": "ok", "detail": "有可用 provider"}
+{"ts": "2026-11-27T13:31:31Z", "state": "ok", "detail": "有可用 provider"}
